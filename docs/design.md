@@ -76,8 +76,23 @@ is needed *now*.
    transactional) + a reservation state machine (`RESERVED → CONFIRMED | RELEASED/EXPIRED`).
 6. **Idempotency** on the money path: key = `orderId`. Inventory dedup `(orderId, productId)`;
    Payments dedup by key with persisted result. **Dedup-insert and decrement in one transaction.**
-7. **Resilience4j** for CB/retry/bulkhead/time-limiter (pending Boot-4 compatibility check —
-   see agent-log #2).
+7. **Resilience4j — circuit breaker (Phase 2 §1, IMPLEMENTED 2026-06-25).** Orders→Payments is wrapped in a
+   circuit breaker applied **programmatically** through the injected `CircuitBreakerRegistry`
+   (`HttpPaymentsGateway`), **not** the `@CircuitBreaker` annotation: the `-spring-boot3` starter's AOP aspect
+   is not guaranteed to weave on Boot 4 (agent-log #2), whereas the registry bean is verified to bind, so
+   decorating through it is deterministic (proven end-to-end by `PaymentsGatewayBreakerIntegrationTest`).
+   Policy (`instances.payments`): COUNT window 10, min 5 calls, **open at >50% failures OR >50% slow calls
+   (slow = >2s)** — the prof's two open criteria (deck 11 s.17); wait-open 10s, 2 half-open probes, auto-transition.
+   `ignore-exceptions: HttpClientErrorException` so a 4xx never trips the breaker; a 4xx is instead mapped to a
+   terminal DECLINED (a permanent client error must not park forever). A transport fault → fallback `"UNAVAILABLE"`
+   → the saga PARKS the order in **`PAYMENT_PENDING`** (it does not reject — the card may be fine — and does not
+   propagate). `OrderRecoverySweeper` retries parked orders and **bounds the park by age** (`app.recovery.max-park`
+   ≤ inventory hold TTL), rejecting a clearly-expired hold WITHOUT re-authorizing so a card is never charged for a
+   restocked hold (residual window observable via `orders_charge_without_refund_total`). The breaker is excluded
+   from health (`management.health.circuitbreakers.enabled: false`) — an OPEN breaker is the system working, not
+   failing. An **optimistic lock** (`@Version` on `Order` + migration V2) prevents duplicate terminal outbox events
+   when the sweep races across pods (the loser rolls back). Retry+jitter (§2), bulkhead (§2), 429 load-shedding (§3)
+   and refund/void compensation (§4) are the remaining Pillar-C items. The thresholds are a team policy decision.
 8. **Tracing:** OpenTelemetry via Micrometer Tracing → OTLP → Tempo/Jaeger; propagate context
    across Kafka headers.
 9. **Progressive delivery:** canary via Traefik `TraefikService` (weighted); blue/green via dual

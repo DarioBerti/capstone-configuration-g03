@@ -38,8 +38,12 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   insufficient (the auto-configuration could back off silently, leaving `@CircuitBreaker`
   annotations inert), so we added a build-breaking assertion in `OrdersApplicationTests`
   that the `CircuitBreakerRegistry` bean actually exists. It passes on Spring Boot 4.0.3 +
-  Resilience4j 2.3.0. Functional open/half-open behaviour is still to be exercised by a
-  dedicated test in Phase 2.
+  Resilience4j 2.3.0. Functional open/half-open behaviour is now exercised in Phase 2 §1
+  (`PaymentsCircuitBreakerTest` drives CLOSED→OPEN→HALF_OPEN→CLOSED on the configured `payments`
+  instance; `PaymentsGatewayBreakerIntegrationTest` proves the real gateway opens and fast-fails
+  end-to-end against an unreachable Payments). To eliminate the residual AOP risk entirely we apply
+  the breaker **programmatically** via the registry rather than the `@CircuitBreaker` annotation
+  (see design.md decision 7).
 
 ## 3. (Reserved) readiness vs liveness probe scoping
 
@@ -108,6 +112,31 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   before any bulk update, and the sweep persists ALL transitions before the first restock
   (the clear detaches the remaining entities mid-loop). All 12 inventory tests green,
   including 8-thread last-seat and concurrent-duplicate races.
+
+## 7. Phase 2 §1 first cut: the circuit-breaker fallback masked permanent faults and the recovery sweep had unsafe edges
+
+- **Produced (2026-06-25):** the initial §1 implementation (circuit breaker + `PAYMENT_PENDING` + recovery
+  sweep) mapped EVERY exception from Payments to the `UNAVAILABLE` fallback, swept the whole batch of parked
+  orders inside one try/catch, and shipped no test for the `@Version` concurrency it relies on.
+- **Why wrong (caught by an adversarial multi-agent review of the diff):**
+  1. **A 4xx parked the order forever.** A deterministic client error (`HttpClientErrorException`) was ignored
+     by the breaker (correct) but still rethrown and swallowed into `UNAVAILABLE`, so the sweep retried it every
+     5s with the identical result — an infinite `PAYMENT_PENDING`. Fix: a dedicated `catch (HttpClientErrorException)`
+     maps a 4xx to a terminal `DECLINED` (`PaymentsGateway4xxTest`).
+  2. **The recovery sweep widened a money leak.** On a long outage the inventory hold (TTL 2m) expires while the
+     order is parked; the sweep would then re-authorize (CHARGE) and fail confirm (EXPIRED) with no refund until
+     §4. Fix: the sweep bounds the park by age and rejects an expired hold WITHOUT charging
+     (`OrderRecoverySweeperTest`); the residual sub-second window is made observable
+     (`orders_charge_without_refund_total`).
+  3. **One failing order aborted the whole sweep batch.** A single outer try/catch meant a lost `@Version` race
+     (an EXPECTED outcome on multi-pod sweeps) skipped every later order in that pass. Fix: per-order isolation.
+  4. **The load-bearing `@Version` had zero coverage** — sequential replay never fires it. Fix: an 8-thread
+     concurrent-confirm test asserts exactly one terminal event survives (`OrderVersionConcurrencyTest`).
+- **How caught:** four parallel reviewer agents over the diff (r4j-correctness, concurrency, saga-resume,
+  quality/tests); the high-confidence findings were verified true and fixed, each pinned by a new test.
+- **Fix:** all of the above; the orders suite went 15 → 20 tests, all green. Open follow-up: the Flyway V2 +
+  Hibernate `validate` path is still only exercised on H2; validating it on the real postgres profile
+  (Testcontainers) is deferred to the cluster phase.
 
 ---
 

@@ -22,7 +22,7 @@ Team-authored DoD. Each item is short, operational, and checkable. Status: ☐ t
 - ☐ Chaos-proven: "never oversell" holds under duplicate messages and pod kill.
 
 ## Pillar C — Resilience
-- ☐ Circuit breaker on Orders → Payments (open/half-open policy + safe fallback).
+- ☑ Circuit breaker on Orders → Payments (open/half-open policy + safe fallback). *(Phase 2 §1, 2026-06-25 — programmatic via CircuitBreakerRegistry + PAYMENT_PENDING parking + recovery sweep; PaymentsCircuitBreakerTest + PaymentsGatewayBreakerIntegrationTest)*
 - ☐ Bulkheads isolate resource pools; a slow downstream cannot exhaust shared threads/conns.
 - ☐ Timeouts + bounded retries with backoff **and jitter** on every remote call.
 - ☐ Backpressure / load shedding (HTTP 429) under overload instead of unbounded queuing.
