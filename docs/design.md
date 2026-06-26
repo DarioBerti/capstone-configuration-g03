@@ -76,7 +76,7 @@ is needed *now*.
    transactional) + a reservation state machine (`RESERVED → CONFIRMED | RELEASED/EXPIRED`).
 6. **Idempotency** on the money path: key = `orderId`. Inventory dedup `(orderId, productId)`;
    Payments dedup by key with persisted result. **Dedup-insert and decrement in one transaction.**
-7. **Resilience4j — circuit breaker (Phase 2 §1, IMPLEMENTED 2026-06-25).** Orders→Payments is wrapped in a
+7. **Resilience4j — circuit breaker (Phase 2 #1, IMPLEMENTED 2026-06-25).** Orders→Payments is wrapped in a
    circuit breaker applied **programmatically** through the injected `CircuitBreakerRegistry`
    (`HttpPaymentsGateway`), **not** the `@CircuitBreaker` annotation: the `-spring-boot3` starter's AOP aspect
    is not guaranteed to weave on Boot 4 (agent-log #2), whereas the registry bean is verified to bind, so
@@ -93,9 +93,9 @@ is needed *now*.
    failing. An **optimistic lock** (`@Version` on `Order` + migration V2) prevents duplicate terminal outbox events
    when the sweep races across pods (the loser rolls back). The thresholds are a team policy decision.
 
-   **Resilience4j — retry + bulkhead + timeout (Phase 2 §2, IMPLEMENTED 2026-06-26).** Both gateways now route every
+   **Resilience4j — retry + bulkhead + timeout (Phase 2 #2, IMPLEMENTED 2026-06-26).** Both gateways now route every
    remote call through `GatewayResilience` (single source of truth for the policy composition), applied
-   **programmatically** like §1 (per-module `Bulkhead`/`CircuitBreaker`/`Retry.decorateCallable`, **not** the
+   **programmatically** like #1 (per-module `Bulkhead`/`CircuitBreaker`/`Retry.decorateCallable`, **not** the
    `@Bulkhead`/`@Retry` annotations — and not the `Decorators` builder, which lives in `resilience4j-all`, a
    non-dependency; the per-module decorators are already on the starter's classpath). **Composition order** =
    `Retry( CircuitBreaker( Bulkhead( call ) ) )` (canonical R4j, retry outermost). **Retry**
@@ -116,7 +116,20 @@ is needed *now*.
    coordinator; bulkhead + idempotent retry suffice). Proven by `RetryBulkheadConfigTest` (non-default binding +
    retry-exceptions whitelist), `PaymentsRetryTest` (5xx retried, 4xx not), `BulkheadIsolationTest` (saturate Payments
    ⇒ Inventory unaffected), `PaymentsRetryIntegrationTest` (503→503→200 absorbed end-to-end; always-503 → UNAVAILABLE).
-   Sizes/attempts are a team policy decision, tunable. 429 load-shedding (§3) and refund/void compensation (§4) remain.
+   Sizes/attempts are a team policy decision, tunable.
+
+   **Resilience4j — backpressure / load shedding (Phase 2 #3, IMPLEMENTED 2026-06-26).** The synchronous intake
+   `POST /api/orders` is rate-limited: over budget it is refused immediately with **HTTP 429 + `Retry-After`**
+   instead of being queued ("backpressure is controlled refusal"; "queues just delay the failure", deck 11 s.24/7).
+   Applied **programmatically** via `RateLimiterRegistry` in a dedicated edge component `OrdersIntakeRateLimiter`
+   (`withPermit{}`) — same Boot-4 rationale as #1/#2 (no `@RateLimiter` AOP). `instances.orders-intake`:
+   `limit-for-period 20`, `limit-refresh-period PT1S`, `timeout-duration PT0S` (never queue — shed at once). The
+   `Retry-After` value is **derived from the limiter window** (not a magic number). Health indicator disabled
+   (`management.health.ratelimiters.enabled: false`) like the breaker — shedding is the system *working*, it must
+   not flip readiness. The 429 lives **only at the edge**; internal saga calls are governed by breaker/bulkhead,
+   never a 429 (#3.5). Observable as the low-cardinality counter `orders_intake_shed_total`. Proven by
+   `OrdersIntakeRateLimiterTest` (within budget → 202; over budget → shed counted → 429 + Retry-After). The
+   threshold is a team policy decision, tunable from a load-test baseline. Refund/void compensation (#4) remains.
 8. **Tracing:** OpenTelemetry via Micrometer Tracing → OTLP → Tempo/Jaeger; propagate context
    across Kafka headers.
 9. **Progressive delivery:** canary via Traefik `TraefikService` (weighted); blue/green via dual
@@ -149,7 +162,7 @@ is needed *now*.
 ## 5. Open decisions (awaiting teammate feedback)
 - ~~D1 granularity~~ → **resolved 2026-06-09** (team feedback): dedicated HA clusters for
   Orders & Inventory; small dedicated single-instance clusters for Payments and Catalog
-  (rationale in §4.1; replication posture in §4.12).
+  (rationale in #4.1; replication posture in #4.12).
 - D2: include a minimal gateway auth check at all?
 - D9: stick to TraefikService, or also evaluate Argo Rollouts for canary automation?
 - D12 variant to confirm with the team: inventory-db at 3 instances (chosen: survives one

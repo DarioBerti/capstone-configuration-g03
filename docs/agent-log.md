@@ -38,7 +38,7 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   insufficient (the auto-configuration could back off silently, leaving `@CircuitBreaker`
   annotations inert), so we added a build-breaking assertion in `OrdersApplicationTests`
   that the `CircuitBreakerRegistry` bean actually exists. It passes on Spring Boot 4.0.3 +
-  Resilience4j 2.3.0. Functional open/half-open behaviour is now exercised in Phase 2 §1
+  Resilience4j 2.3.0. Functional open/half-open behaviour is now exercised in Phase 2 #1
   (`PaymentsCircuitBreakerTest` drives CLOSED→OPEN→HALF_OPEN→CLOSED on the configured `payments`
   instance; `PaymentsGatewayBreakerIntegrationTest` proves the real gateway opens and fast-fails
   end-to-end against an unreachable Payments). To eliminate the residual AOP risk entirely we apply
@@ -89,7 +89,7 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
 - **Fix:** `inventory-db` → synchronous replication (3 instances, ANY 1,
   `dataDurability: required`, RPO=0; writes block if the primary is isolated — consistency
   over availability, as stated). `orders-db` → synchronous `preferred` (RPO=0 while healthy,
-  degrades to async rather than blocking intake). Documented in `design.md` §4.12; requires
+  degrades to async rather than blocking intake). Documented in `design.md` #4.12; requires
   CNPG ≥ 1.25.
 
 ## 6. Lost state transitions: `@Modifying(clearAutomatically = true)` silently dropped unflushed entity changes
@@ -113,9 +113,9 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   (the clear detaches the remaining entities mid-loop). All 12 inventory tests green,
   including 8-thread last-seat and concurrent-duplicate races.
 
-## 7. Phase 2 §1 first cut: the circuit-breaker fallback masked permanent faults and the recovery sweep had unsafe edges
+## 7. Phase 2 #1 first cut: the circuit-breaker fallback masked permanent faults and the recovery sweep had unsafe edges
 
-- **Produced (2026-06-25):** the initial §1 implementation (circuit breaker + `PAYMENT_PENDING` + recovery
+- **Produced (2026-06-25):** the initial #1 implementation (circuit breaker + `PAYMENT_PENDING` + recovery
   sweep) mapped EVERY exception from Payments to the `UNAVAILABLE` fallback, swept the whole batch of parked
   orders inside one try/catch, and shipped no test for the `@Version` concurrency it relies on.
 - **Why wrong (caught by an adversarial multi-agent review of the diff):**
@@ -125,7 +125,7 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
      maps a 4xx to a terminal `DECLINED` (`PaymentsGateway4xxTest`).
   2. **The recovery sweep widened a money leak.** On a long outage the inventory hold (TTL 2m) expires while the
      order is parked; the sweep would then re-authorize (CHARGE) and fail confirm (EXPIRED) with no refund until
-     §4. Fix: the sweep bounds the park by age and rejects an expired hold WITHOUT charging
+     #4. Fix: the sweep bounds the park by age and rejects an expired hold WITHOUT charging
      (`OrderRecoverySweeperTest`); the residual sub-second window is made observable
      (`orders_charge_without_refund_total`).
   3. **One failing order aborted the whole sweep batch.** A single outer try/catch meant a lost `@Version` race
@@ -137,6 +137,23 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
 - **Fix:** all of the above; the orders suite went 15 → 20 tests, all green. Open follow-up: the Flyway V2 +
   Hibernate `validate` path is still only exercised on H2; validating it on the real postgres profile
   (Testcontainers) is deferred to the cluster phase.
+
+## 8. Phase 2 #3 test used a Spring test slice (`MockMvc`) absent from the Boot-4 classpath
+
+- **Produced (2026-06-26):** the first cut of `OrdersIntakeRateLimiterTest` exercised the 429 via
+  `@AutoConfigureMockMvc` + `MockMvc` (`org.springframework.test.web.servlet.*`).
+- **Why wrong:** the orders module's test dependencies are the **sliced** Boot-4 test starters
+  (`spring-boot-starter-webmvc-test`, `…-data-jpa-test`), which do **not** bring `MockMvc` /
+  `@AutoConfigureMockMvc` — the build failed at `compileTestKotlin` (`Unresolved reference 'web'`).
+  The agent reached for a familiar idiom without checking it was on the classpath, and it also
+  diverged from this project's established style (every other test drives the controller/saga bean
+  **directly**, e.g. `CatalogControllerTest`, `OrderSagaTest`).
+- **How caught:** `./gradlew test` (compile failure) — i.e. the build itself, before the change could
+  be pushed. A green-looking plan is not a green build.
+- **Fix:** rewrote the test in the project's direct-call style — autowire `OrdersController`, assert
+  202 → shed (counter `orders_intake_shed_total` +1) → `IntakeOverloadedException`, then invoke the
+  `@ExceptionHandler` directly to assert HTTP 429 + the `Retry-After` header. No extra test dependency;
+  consistent with the codebase. Orders suite now green including the new test.
 
 ---
 
