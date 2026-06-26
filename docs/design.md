@@ -91,8 +91,32 @@ is needed *now*.
    restocked hold (residual window observable via `orders_charge_without_refund_total`). The breaker is excluded
    from health (`management.health.circuitbreakers.enabled: false`) — an OPEN breaker is the system working, not
    failing. An **optimistic lock** (`@Version` on `Order` + migration V2) prevents duplicate terminal outbox events
-   when the sweep races across pods (the loser rolls back). Retry+jitter (§2), bulkhead (§2), 429 load-shedding (§3)
-   and refund/void compensation (§4) are the remaining Pillar-C items. The thresholds are a team policy decision.
+   when the sweep races across pods (the loser rolls back). The thresholds are a team policy decision.
+
+   **Resilience4j — retry + bulkhead + timeout (Phase 2 §2, IMPLEMENTED 2026-06-26).** Both gateways now route every
+   remote call through `GatewayResilience` (single source of truth for the policy composition), applied
+   **programmatically** like §1 (per-module `Bulkhead`/`CircuitBreaker`/`Retry.decorateCallable`, **not** the
+   `@Bulkhead`/`@Retry` annotations — and not the `Decorators` builder, which lives in `resilience4j-all`, a
+   non-dependency; the per-module decorators are already on the starter's classpath). **Composition order** =
+   `Retry( CircuitBreaker( Bulkhead( call ) ) )` (canonical R4j, retry outermost). **Retry**
+   (`instances.{payments,inventory}`): max-attempts 3, 200ms base, exponential ×2 + jitter; `retry-exceptions` =
+   **transport only** (`HttpServerErrorException`, `ResourceAccessException`) — never a 4xx / business outcome, never
+   `CallNotPermittedException` (breaker OPEN ⇒ fast-fail, no retry storm, slide 45) or `BulkheadFullException`. The
+   values are **deliberately shorter than the slide-22 example (1s/2s/4s, cap 30s, max 5)**: the slide's own rule is
+   "derive retry/timeout from the end-to-end deadline", and our checkout SLO is e2e p95 ≤ 5s — so the inline retry only
+   absorbs a single transient blip, while a sustained outage is handled by breaker → `PAYMENT_PENDING` → recovery sweep
+   (the "long retry"). **Bulkhead** (SEMAPHORE, fail-fast `max-wait 0` — no queue, slide 7): separate instances
+   `payments` (8) / `inventory` (16) — the separation IS the isolation (a slow Payments exhausts only its own permits,
+   deck 11 s.20); a saturated Payments bulkhead → `BulkheadFullException` → mapped to `UNAVAILABLE`/park (controlled
+   refusal, observable as `orders_payment_failures_total{outcome=bulkhead_full}` — a DISTINCT outcome from a
+   downstream-down/breaker-open `unavailable`), and added to the **breaker's ignore-exceptions** so a local concurrency
+   cap never by itself opens the breaker (genuine slowness is already caught by the >2s slow-call rate). **Timeouts** (connect 2s / read 5s,
+   unchanged) are the per-call deadline partition of the checkout budget — there is no `docs/slo.md` file yet, so the
+   budget is documented here. The breaker stays **Payments-only** (Inventory is the contended resource, not a money
+   coordinator; bulkhead + idempotent retry suffice). Proven by `RetryBulkheadConfigTest` (non-default binding +
+   retry-exceptions whitelist), `PaymentsRetryTest` (5xx retried, 4xx not), `BulkheadIsolationTest` (saturate Payments
+   ⇒ Inventory unaffected), `PaymentsRetryIntegrationTest` (503→503→200 absorbed end-to-end; always-503 → UNAVAILABLE).
+   Sizes/attempts are a team policy decision, tunable. 429 load-shedding (§3) and refund/void compensation (§4) remain.
 8. **Tracing:** OpenTelemetry via Micrometer Tracing → OTLP → Tempo/Jaeger; propagate context
    across Kafka headers.
 9. **Progressive delivery:** canary via Traefik `TraefikService` (weighted); blue/green via dual
