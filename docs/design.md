@@ -88,7 +88,9 @@ is needed *now*.
    → the saga PARKS the order in **`PAYMENT_PENDING`** (it does not reject — the card may be fine — and does not
    propagate). `OrderRecoverySweeper` retries parked orders and **bounds the park by age** (`app.recovery.max-park`
    ≤ inventory hold TTL), rejecting a clearly-expired hold WITHOUT re-authorizing so a card is never charged for a
-   restocked hold (residual window observable via `orders_charge_without_refund_total`). The breaker is excluded
+   restocked hold (since #4 the sweep also voids any live charge before rejecting, and on an unreachable Payments keeps
+   the order parked to retry the void rather than abandon it — see decision 7 #4; observable via
+   `orders_recovery_total{outcome=void_retry}` / `orders_compensations_total{type=refund}`). The breaker is excluded
    from health (`management.health.circuitbreakers.enabled: false`) — an OPEN breaker is the system working, not
    failing. An **optimistic lock** (`@Version` on `Order` + migration V2) prevents duplicate terminal outbox events
    when the sweep races across pods (the loser rolls back). The thresholds are a team policy decision.
@@ -104,7 +106,7 @@ is needed *now*.
    `CallNotPermittedException` (breaker OPEN ⇒ fast-fail, no retry storm, slide 45) or `BulkheadFullException`. The
    values are **deliberately shorter than the slide-22 example (1s/2s/4s, cap 30s, max 5)**: the slide's own rule is
    "derive retry/timeout from the end-to-end deadline", and our checkout SLO is e2e p95 ≤ 5s — so the inline retry only
-   absorbs a single transient blip, while a sustained outage is handled by breaker → `PAYMENT_PENDING` → recovery sweep
+   absorbs up to two transient blips (max-attempts 3 = 1 call + 2 retries), while a sustained outage is handled by breaker → `PAYMENT_PENDING` → recovery sweep
    (the "long retry"). **Bulkhead** (SEMAPHORE, fail-fast `max-wait 0` — no queue, slide 7): separate instances
    `payments` (8) / `inventory` (16) — the separation IS the isolation (a slow Payments exhausts only its own permits,
    deck 11 s.20); a saturated Payments bulkhead → `BulkheadFullException` → mapped to `UNAVAILABLE`/park (controlled
@@ -129,7 +131,37 @@ is needed *now*.
    not flip readiness. The 429 lives **only at the edge**; internal saga calls are governed by breaker/bulkhead,
    never a 429 (#3.5). Observable as the low-cardinality counter `orders_intake_shed_total`. Proven by
    `OrdersIntakeRateLimiterTest` (within budget → 202; over budget → shed counted → 429 + Retry-After). The
-   threshold is a team policy decision, tunable from a load-test baseline. Refund/void compensation (#4) remains.
+   threshold is a team policy decision, tunable from a load-test baseline.
+
+   **Resilience4j — refund/void compensation (Phase 2 #4, IMPLEMENTED 2026-06-26).** Closes the saga's last gap:
+   if the inventory hold expires AFTER `authorize` charged the card, the saga now **voids** the charge before
+   rejecting, preserving the invariant *"no charge without a seat"* (decision #3). **Void = an idempotent state
+   transition `AUTHORIZED → VOIDED` on the EXISTING `payment_authorizations` aggregate** (`PaymentsService.void`,
+   `POST /api/payments/authorizations/{orderId}/void`) — **not** a separate reversal table: it is the real PSP
+   semantics (cancel an un-captured authorization), and re-voiding a `VOIDED` row is a replay. *"refund" in the
+   metric name denotes this void primitive* (the mock PSP authorizes, never captures, so there is no CAPTURED
+   state to refund). **No migration**: `VOIDED` writes into the existing `status VARCHAR(16)` with no CHECK; on
+   postgres `ddl-auto: validate` checks the column mapping, not the enum value-set. **No Kafka event** (payment
+   events are best-effort/informational with no consumer). The gateway `payments.void` reuses the **same `payments`
+   Resilience4j instance** as authorize (breaker+bulkhead+retry — same downstream, idempotent ⇒ retry-safe, slide
+   22), with the **same 4-branch fallback** (distinct `bulkhead_full` vs `unavailable`; a void 404 → benign
+   `NOT_FOUND`). **Failed-void handling = Option B (team decision):** on `UNAVAILABLE`/`FAILED` the saga does **not**
+   go terminal with a live charge — it **parks** (`PAYMENT_PENDING`) so `OrderRecoverySweeper` re-drives the saga and
+   **retries the void** until it succeeds. At the `app.recovery.max-park` boundary the sweep is consistent with this:
+   it voids, then rejects only when the money state is **resolved** (`VOIDED` = reversed, or `NOT_FOUND`/`DECLINED` =
+   no charge ever); if Payments is still unreachable (`UNAVAILABLE`/`FAILED`) it **keeps the order parked and retries
+   the void next sweep** rather than abandoning a possibly-live charge (`orders_recovery_total{outcome=void_retry}`).
+   *Tradeoff (team decision):* this trades the old bounded-retention guarantee for money-safety — during a sustained
+   Payments outage parked orders drain on recovery instead of being force-terminated at max-park. A crash between
+   void and reject is absorbed by a `"VOIDED" → reject(RESERVATION_EXPIRED)` branch in the stage-2 dispatch (a
+   VOIDED replay = already compensated). Observable via `orders_compensations_total{type="refund"}` (successful
+   reversals, counted once via the `replayed` flag) and `payments_voids_total{outcome}`. **Follow-up:** a lost-update guard (`@Version` / conditional
+   `UPDATE … WHERE status='AUTHORIZED'`) on the void transition is **deferred** — money-safe today (void has no
+   external side-effect, so a concurrent double-void converges to the same `VOIDED` row), and adding `@Version`
+   would break the migration-free property; it becomes required only if a real PSP storno side-effect is ever added.
+   Proven by `OrderSagaTest` (compensation #5.4, failed-void-parks-then-rejects, VOIDED-replay) and
+   `PaymentsServiceTest` (void idempotency, no-op on declined, not-found). The design's first cut (reject-always +
+   counter) only OBSERVED the leak; a 3-lens adversarial review caught it — see `agent-log.md` #9.
 8. **Tracing:** OpenTelemetry via Micrometer Tracing → OTLP → Tempo/Jaeger; propagate context
    across Kafka headers.
 9. **Progressive delivery:** canary via Traefik `TraefikService` (weighted); blue/green via dual

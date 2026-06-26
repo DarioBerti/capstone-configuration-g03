@@ -155,6 +155,82 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   `@ExceptionHandler` directly to assert HTTP 429 + the `Retry-After` header. No extra test dependency;
   consistent with the codebase. Orders suite now green including the new test.
 
+## 9. Phase 2 #4 first design: "reject-always + counter" only OBSERVED the money leak, it never CLOSED it
+
+- **Produced (2026-06-26):** the first #4 design (refund/void compensation) added an idempotent
+  `AUTHORIZED→VOIDED` transition on the existing Payments aggregate and, in the saga's expired-hold branch,
+  called `payments.void(id)` then **always** `reject(RESERVATION_EXPIRED)`, incrementing
+  `orders_charge_without_refund_total` when the void failed. The core (no reversal table, reuse of the
+  `payments` Resilience4j instance, no migration, no Kafka event) was sound.
+- **Why wrong (caught by an adversarial 3-lens review of the design BEFORE coding):**
+  1. **A failed void leaked permanently.** On a sustained Payments outage the shared breaker is already OPEN,
+     so the void fast-fails to `UNAVAILABLE`; `reject` is terminal and `OrderRecoverySweeper` only re-drives
+     `PAYMENT_PENDING` — so the charge was never retried and never reversed. "Money-observable" is not
+     "money-safe". Fix (team-chosen **Option B**): a failed void no longer rejects — it **parks**
+     (`markPaymentPending`) so the existing recovery sweep re-drives the saga and **retries the void** until it
+     succeeds, then rejects. Bounded by `app.recovery.max-park`. No new state, reuses the existing loop.
+  2. **The sweeper's max-park-expiry reject was an INVISIBLE leak.** A crash after a re-authorize-on-sweep but
+     before the void left a live charge; once past max-park the sweeper rejected WITHOUT voiding and WITHOUT
+     any metric. Fix: the expiry path now attempts an idempotent best-effort `payments.void(id)` first
+     (no charge → 404/no-op; a live charge → reversed).
+  3. **A crash between void and reject mis-parked the order ~2 min and spammed false "unexpected status".**
+     The replayed `authorize` returns the new `VOIDED` status, which fell into the saga's `else` (park) branch.
+     Fix: a `"VOIDED" -> reject(RESERVATION_EXPIRED)` branch in the stage-2 dispatch (a VOIDED replay = already
+     compensated → finish the rejection).
+  Minor fixes folded in: a dedicated `payments_voids_total{outcome}` meter (don't pollute the authorize RED
+  series), a 4-branch gateway fallback mirroring `authorize` (keep `bulkhead_full` distinct, map void 404 →
+  benign `NOT_FOUND`), and reuse of `AuthorizationResult` for the gateway `void` (no redundant `VoidResult`).
+- **How caught:** three parallel reviewer agents over the design (idempotency-correctness, codebase-consistency,
+  antipattern-theory) returned a unanimous "sound-with-fixes"; the two majors (leak windows) and the
+  crash-window were verified true against the source and incorporated before implementation.
+- **Fix:** all of the above, each pinned by a test — `OrderSagaTest` gained the compensation (#5.4),
+  failed-void-parks-then-rejects, and VOIDED-replay cases; `PaymentsServiceTest` gained void idempotency /
+  no-op-on-declined / not-found. Orders 27 → 30 green, Payments 7 → 11 green. The lost-update guard
+  (`@Version`/conditional UPDATE) on the void transition is deferred (money-safe today — no external
+  side-effect — and adding it would break the migration-free property); recorded as a follow-up in `design.md`.
+
+## 10. Coherence audit: the inventory restock had NO optimistic-lock guard → oversell under ≥2 replicas
+
+- **Produced (Fase 1, surfaced by a 5-lens read-only audit 2026-06-26):** the never-oversell invariant was
+  protected on the RESERVE side (atomic conditional `tryDecrement`) but the inverse RESTOCK side was left
+  unguarded. `InventoryItemRepository.restock` is an **unconditional additive** `available = available + qty`,
+  and `confirm`/`release`/`expireOverdue` did a **read-status-then-write** (`status==RESERVED` check) with **no
+  `@Version`** on `Reservation` and no row lock — while `OrderRecoverySweeper`'s symmetric multi-pod race had
+  been guarded with `@Version` on `Order` (decision 7/V2).
+- **Why wrong:** inventory runs `replicaCount: 2` (no leader election), so two reconcilers — or a late `confirm`
+  racing the reconciler (even in ONE pod: request thread vs reconciler coroutine) — both read the same
+  RESERVED+expired hold, both flip it EXPIRED (UPDATE by id, no guard), and **both restock** (+qty twice). The
+  additive restock is **non-convergent**, so the convergence argument that (correctly) lets `PaymentAuthorization`
+  skip `@Version` (an idempotent overwrite, #4/#9) does **not** transfer here. Result: phantom availability → the
+  next reserve oversells, breaking the headline invariant (`V1` only CHECKs `available >= 0`, no upper bound).
+- **How caught:** the audit's idempotency/money-path lens flagged it (single-sourced); we then **verified it on
+  the source** and **proved it with a failing test** — a new multi-transaction test in `InventoryConcurrencyTest`
+  (8 concurrent `expireOverdue` / `confirm`-vs-sweep on one hold) asserts a SINGLE restock; with `@Version` removed
+  it fails (double-restock), with `@Version` it passes.
+- **Fix:** `@Version` on `Reservation` + `V3__add_reservation_version.sql`. The existing
+  `@Modifying(flushAutomatically = true)` on `restock` makes the versioned reservation UPDATE flush **before** the
+  additive restock, so a stale-version loser throws `ObjectOptimisticLockingFailureException` and rolls back
+  **before** restocking. `confirm`/`release` map a lost race to a clean re-read of the now-terminal state (200,
+  not a spurious 5xx) via `InventoryController`; the reconciler's batch rolls back and self-heals next sweep.
+
+## 11. Coherence audit: #4 first cut left a dangling metric and an abandoned-charge boundary
+
+- **Produced (Fase 2 #4):** `design.md` decision 7 #1 claimed the residual money-leak window was "observable via
+  `orders_charge_without_refund_total`", but #4 had **removed that counter from the code** (replaced by
+  `orders_compensations_total` / `payments_voids_total`) — a canonical doc pointing at a non-existent metric. The
+  sweeper's max-park-expiry path also did a best-effort void then **rejected unconditionally**, so a still-down
+  Payments left a possibly-live charge abandoned, uncounted — inconsistent with the saga's own stage-3
+  park-on-failed-void. Separately, `orders_compensations_total{type=refund}` could **over-count** under concurrent
+  drivers because the saga ignored the void's `replayed` flag.
+- **Why wrong:** deck 10 — every policy must emit an accurate, alertable signal; a doc that references a dead
+  metric and a leak window that is only WARN-logged both violate that. The two saga drivers disagreeing on the
+  same outcome is an internal incoherence.
+- **How caught:** the audit's observability + antipattern lenses; verified against the source.
+- **Fix (team decision = Option B, money-safety over bounded retention):** the sweeper now rejects at max-park
+  only when the money state is **resolved** (`VOIDED`/`NOT_FOUND`/`DECLINED`) and **keeps the order parked + retries
+  the void** when Payments is unreachable (`orders_recovery_total{outcome=void_retry}`); `design.md` updated to the
+  real metrics and the retention tradeoff; the compensation counter is gated on `!replayed` in both drivers.
+
 ---
 
 _Add new entries as they happen. Aim well past the required three; every caught mistake is
