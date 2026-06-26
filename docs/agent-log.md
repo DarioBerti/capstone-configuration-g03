@@ -231,6 +231,29 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   the void** when Payments is unreachable (`orders_recovery_total{outcome=void_retry}`); `design.md` updated to the
   real metrics and the retention tradeoff; the compensation counter is gated on `!replayed` in both drivers.
 
+## 12. Phase 2 #5 gap-analysis: a "proven" property was only proven by composition, and one test loop was un-gated
+
+- **Produced (interleaved with #1-#4):** the resilience test suite. A 3-lens gap-analysis of it against the #5
+  acceptance criteria found two subtle weaknesses behind otherwise-green tests:
+  1. **5.3 (retry is safe ONLY because idempotent) was asserted by COMPOSITION, never in one flow.**
+     `PaymentsRetryIntegrationTest` fires the real retry but its stub 503s at the transport layer *before* any side
+     effect (nothing is ever charged to dedup; it asserts the attempt *count*, not a charge), while
+     `PaymentsServiceTest` dedups with two *direct* calls and no retry. No test modelled the slide-22 danger: a charge
+     that **commits on the server then loses its response**, so the client retransmits onto an idempotent endpoint.
+  2. **The inventory `ReservationReconciler` had NO enabled-gate** (unlike orders' `OrderRecoverySweeper`): the 3
+     inventory `@SpringBootTest` were only *timing-safe* (the `PT15S` sweep outran sub-second tests), not gated. After
+     the #1 oversell fix added tests that seed already-expired holds, that became a latent race against the seat-count
+     assertions on a shared cached context.
+- **Why it matters:** "a property you prove" (deck 11 s.41) is not proven if the proof is inferred across two tests
+  in two services; and a test that passes only because a background loop happens to be slow is a flake waiting to fire.
+- **How caught:** the gap-analysis (coverage map + gating audit + chaos-doc design), each finding verified against the
+  source; the 5.3 gap was then made **falsifiable** (removing the stub's `putIfAbsent` dedup turns the new test red).
+- **Fix:** new `PaymentsRetryIdempotencyIntegrationTest` (real gateway + idempotent stub + response-lost-after-commit →
+  exactly one charge, build-breaking); `inventory.reservation.enabled` gate on `ReservationReconciler` mirroring
+  `OrderRecoverySweeper`, set `false` in the 3 inventory tests (race-free by gating, not timing); plus the #5.6
+  traceability doc (`docs/chaos/test-traceability.md`) + `@Tag("chaos-NN")` mapping each functional test to its
+  anticipated cluster experiment.
+
 ---
 
 _Add new entries as they happen. Aim well past the required three; every caught mistake is
