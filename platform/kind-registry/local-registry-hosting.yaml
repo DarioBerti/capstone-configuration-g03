@@ -1,0 +1,12 @@
+# Standard kind "local registry hosting" advert.
+# Tells tooling/IDEs that a local image registry is available at localhost:5001.
+# Applied by `just registry-up`. See https://kind.sigs.k8s.io/docs/user/local-registry/
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-registry-hosting
+  namespace: kube-system
+data:
+  localRegistryHosting.v1: |
+    host: "localhost:5001"
+    help: "https://kind.sigs.k8s.io/docs/user/local-registry/"

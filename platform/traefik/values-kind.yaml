@@ -1,0 +1,30 @@
+# Traefik overlay for the LOCAL kind cluster. Layered on top of values.yaml.
+#
+# kind has no cloud LoadBalancer. Host ports 80/443 are mapped (bootstrap/kind-config.yaml)
+# ONLY to the control-plane node, which carries the label ingress-ready=true. So Traefik must
+#   (1) schedule onto that node, and
+#   (2) bind 80/443 on it via hostPort.
+
+deployment:
+  # only the control-plane node is eligible (single ingress-ready node) -> one replica
+  replicas: 1
+
+# (1) pin Traefik to the control-plane node where kind maps host 80/443
+nodeSelector:
+  ingress-ready: "true"
+# control-plane nodes are tainted to repel pods; tolerate that taint so Traefik may land there
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+# (2) bind the node's 80/443 so kind's extraPortMappings forward laptop:80/443 into Traefik
+ports:
+  web:
+    hostPort: 80
+  websecure:
+    hostPort: 443
+
+# with hostPort we don't need an external LoadBalancer/NodePort; keep the Service internal
+service:
+  type: ClusterIP

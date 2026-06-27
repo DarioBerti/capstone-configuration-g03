@@ -1,0 +1,140 @@
+# Strimzi Kafka for the LOCAL kind cluster — single node, NO high availability.
+# Self-contained dev override (cluster + topics in one file). Apply THIS on kind instead of
+# kafka.yaml + kafka-topics.yaml. Pinned to Strimzi 1.1.0 + Kafka 4.3.0 (API kafka.strimzi.io/v1).
+#
+# Why a separate file: a 1-node broker CANNOT satisfy replication.factor=3 / replicas=3, so every
+# replication setting here is 1. This trades away durability/HA for a tiny laptop footprint.
+# DO NOT use this for the chaos experiments (#4) — those need the 3-node kafka.yaml.
+---
+# One dual-role node: it is the sole KRaft controller AND the sole broker.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  # single node (no quorum, no HA) — enough to develop the async pipeline locally
+  replicas: 1
+  roles:
+    - controller
+    - broker
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      memory: 1Gi
+  jvmOptions:
+    -Xms: 512m
+    -Xmx: 512m
+  storage:
+    type: persistent-claim
+    # smaller disk for local dev
+    size: 2Gi
+    deleteClaim: false
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: eurotransit
+  namespace: kafka
+spec:
+  kafka:
+    version: 4.3.0
+    # internal-only plaintext listener on 9092 (reached as the kafkaBootstrap in values.yaml)
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      # single broker -> everything replicated x1 (no other broker to copy to)
+      default.replication.factor: 1
+      min.insync.replicas: 1
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}
+---
+# The 7 saga topics. partitions=3 is fine on one broker (parallelism + per-key ordering);
+# replicas=1 because there is only one broker to hold a copy.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: order-placed
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: inventory-reserved
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: inventory-released
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payment-authorized
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: order-confirmed
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: order-rejected
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: notification-requested
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1

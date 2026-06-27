@@ -10,8 +10,10 @@ kind: Ingress
 metadata:
   name: eurotransit
   annotations:
-    # cert-manager watches this annotation and provisions/renews the TLS cert automatically
-    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # cert-manager watches this annotation and provisions/renews the TLS cert automatically.
+    # The issuer name is environment-specific: "letsencrypt-prod" on the real cluster,
+    # "selfsigned" on local kind (set via global.clusterIssuer in values.yaml / values-kind.yaml).
+    cert-manager.io/cluster-issuer: {{ .Values.global.clusterIssuer }}
 spec:
   # route through the Traefik ingress controller (installed once as a platform component)
   ingressClassName: traefik

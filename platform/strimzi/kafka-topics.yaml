@@ -6,7 +6,7 @@
 #
 # Every topic below uses the same shape: partitions=3 (parallelism -> up to 3 consumers per group work in parallel; same key = same partition = per-order ordering) and replicas=3 (one copy per broker, so a broker loss never loses events)
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   # the synchronous entry's event: Orders' outbox publishes it, Orders' saga consumes it
@@ -19,7 +19,7 @@ spec:
   partitions: 3
   replicas: 3
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: inventory-reserved
@@ -30,7 +30,7 @@ spec:
   partitions: 3
   replicas: 3
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: inventory-released
@@ -41,7 +41,7 @@ spec:
   partitions: 3
   replicas: 3
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: payment-authorized
@@ -52,7 +52,7 @@ spec:
   partitions: 3
   replicas: 3
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: order-confirmed
@@ -63,7 +63,7 @@ spec:
   partitions: 3
   replicas: 3
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: order-rejected
@@ -74,7 +74,7 @@ spec:
   partitions: 3
   replicas: 3
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: notification-requested

@@ -8,6 +8,10 @@ global:
   imagePrefix: eurotransit
   # public host the Ingress serves (TLS cert is issued for this name)
   domain: g03.cpo2026.it
+  # cert-manager ClusterIssuer that signs the Ingress TLS cert (Secret eurotransit-tls).
+  # Default = real Let's Encrypt (Argo CD / prod render base values.yaml only).
+  # Local kind overrides this to "selfsigned" in values-kind.yaml (LE can't validate a laptop).
+  clusterIssuer: letsencrypt-prod
   # Kafka bootstrap exposed by the Strimzi-managed cluster (platform namespace)
   kafkaBootstrap: eurotransit-kafka-bootstrap.kafka.svc:9092
 

@@ -1,13 +1,13 @@
-# Strimzi-managed Kafka cluster for the EuroTransit async pipeline.
-# Skeleton -> pin the Strimzi/Kafka version and tune replicas/storage in Phase 3.
-# KRaft mode (no ZooKeeper) via a KafkaNodePool.
+# Strimzi-managed Kafka cluster for the EuroTransit async pipeline (PROD / HA manifest).
+# Pinned to Strimzi 1.1.0 + Kafka 4.3.0 (API kafka.strimzi.io/v1). KRaft-only via a KafkaNodePool.
+# For LOCAL kind use kafka-kind.yaml instead (single node, RF=1) — far lighter on a laptop.
 #
 # Sizing trade-off (deliberate): 3 dual-role nodes is the MINIMUM for real HA -> the KRaft controller quorum needs 3 voters to tolerate 1 loss, and RF=3/minISR=2 lets the money path survive 1 broker down with 0 event loss. A single-node Kafka would save circa 2 pods but makes the whole async pipeline a SPOF (single-point-of-failure) and weakens chaos experiment #4
 #
 # We keep 3 nodes and bound their footprint instead (512m heap + memory limits) -> right-size, don't shrink HA!
 ---
 # A KafkaNodePool declares a set of Kafka nodes with the same roles/resources/storage
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaNodePool
 metadata:
   name: dual-role
@@ -40,18 +40,16 @@ spec:
     deleteClaim: false
 ---
 # The Kafka cluster itself (brokers are provided by the node pool above)
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: Kafka
 metadata:
   name: eurotransit
   namespace: kafka
-  annotations:
-    # opt into the node-pool model and KRaft (no ZooKeeper)
-    strimzi.io/node-pools: enabled
-    strimzi.io/kraft: enabled
+  # NOTE: in Strimzi 1.x (Kafka 4.x) node pools + KRaft are the ONLY mode, so the old
+  # strimzi.io/node-pools and strimzi.io/kraft annotations are no longer needed.
 spec:
   kafka:
-    version: 3.9.0
+    version: 4.3.0
     # internal-only plaintext listener on 9092 (reached as the kafkaBootstrap in values.yaml)
     listeners:
       - name: plain
