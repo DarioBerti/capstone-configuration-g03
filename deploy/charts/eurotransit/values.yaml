@@ -2,8 +2,8 @@
 
 # Values shared by all services / templates
 global:
-  # container registry that hosts the service images (TODO: capisci quale cluster e registry usiamo per il progetto)
-  registry: lab02g03registry.azurecr.io
+  # container registry that hosts the service images (ACR del gruppo, sub "Azure for Students")
+  registry: labg03clusterregistry.azurecr.io
   # image path prefix: full image = <registry>/<imagePrefix>/<service>
   imagePrefix: eurotransit
   # public host the Ingress serves (TLS cert is issued for this name)
@@ -19,7 +19,7 @@ services:
   catalog:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
-      repository: lab02g03registry.azurecr.io/eurotransit/catalog
+      repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
       tag: latest
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
@@ -42,7 +42,7 @@ services:
 
   orders:
     image:
-      repository: lab02g03registry.azurecr.io/eurotransit/orders
+      repository: labg03clusterregistry.azurecr.io/eurotransit/orders
       tag: latest
       pullPolicy: IfNotPresent
     replicaCount: 2
@@ -64,7 +64,7 @@ services:
 
   inventory:
     image:
-      repository: lab02g03registry.azurecr.io/eurotransit/inventory
+      repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
       tag: latest
       pullPolicy: IfNotPresent
     replicaCount: 2
@@ -78,7 +78,7 @@ services:
 
   payments:
     image:
-      repository: lab02g03registry.azurecr.io/eurotransit/payments
+      repository: labg03clusterregistry.azurecr.io/eurotransit/payments
       tag: latest
       pullPolicy: IfNotPresent
     replicaCount: 2
@@ -92,7 +92,7 @@ services:
 
   notifications:
     image:
-      repository: lab02g03registry.azurecr.io/eurotransit/notifications
+      repository: labg03clusterregistry.azurecr.io/eurotransit/notifications
       tag: latest
       pullPolicy: IfNotPresent
     # single replica: this service is allowed to be fully down (graceful degradation)
