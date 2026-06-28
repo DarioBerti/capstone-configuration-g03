@@ -49,6 +49,17 @@ keycloak:
     adminPassword: admin
     dbPassword: keycloak-dev-pass
     ordersClientSecret: dev-orders-svc-secret
+  # Frontend (SPA) client knobs. Base = prod only: the public domain is always allowed; dev appends
+  # localhost in values-kind.yaml. directAccessGrants stays OFF in prod (no password grant on a public
+  # client) — kind turns it on so test accounts can mint a token via curl.
+  frontend:
+    extraRedirectUris: []
+    extraWebOrigins: []
+  devDirectAccessGrants: false
+  # Pre-seeded test accounts for the eurotransit realm. EMPTY in prod (real users come from Keycloak);
+  # values-kind.yaml populates it so a fresh kind cluster has ready-to-use logins. Each entry:
+  #   { username, email, firstName, lastName, password, roles: [USER|ADMIN ...] }
+  testUsers: []
 
 # Per-service desired state
 # "db" references a database name in ".databases" (or null)

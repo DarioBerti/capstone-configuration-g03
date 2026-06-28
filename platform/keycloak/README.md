@@ -68,6 +68,39 @@ override that value via a **private values overlay** (not committed) so it match
 SealedSecret — or rotate the client secret in the Keycloak console and update the SealedSecret. Never
 commit the real secret in `values.yaml`.
 
+## Test accounts (dev/kind only)
+
+A fresh kind cluster seeds two ready-to-use logins into the `eurotransit` realm (via
+`keycloak.testUsers` in `values-kind.yaml`). They are **never** rendered in prod (`testUsers: []` in the
+base `values.yaml`).
+
+| Username | Password | Email | Realm roles |
+|---|---|---|---|
+| `alice` | `alice` | alice@eurotransit.test | `USER` |
+| `bob` | `bob` | bob@eurotransit.test | `USER`, `ADMIN` |
+
+Use them by signing in through the frontend (`http://localhost:5173` is an allowed redirect on kind).
+
+For a token from the terminal, kind also enables the password grant on the `eurotransit-frontend`
+client (`devDirectAccessGrants: true`):
+
+```bash
+# get an access token for alice
+TOKEN=$(curl -s http://localhost:8180/realms/eurotransit/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=eurotransit-frontend \
+  -d username=alice -d password=alice | jq -r .access_token)
+
+# call a secured endpoint (JIT-provisions her profile on first hit)
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8085/api/users/me | jq
+```
+
+(Adjust the Keycloak host/port to how you reach it locally — e.g. the `auth.localhost` ingress or a
+`kubectl port-forward svc/keycloak-service 8180:8080 -n eurotransit`.)
+
+Add or change accounts by editing `keycloak.testUsers` in `values-kind.yaml`. The realm import seeds
+users on realm creation; to re-seed after changes, delete the `KeycloakRealmImport` (or the realm) and
+let it re-import.
+
 ## OIDC URLs
 
 - `global.oidc.issuer` must equal the `iss` claim Keycloak stamps on tokens — the public host

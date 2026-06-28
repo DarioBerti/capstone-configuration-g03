@@ -46,11 +46,18 @@ spec:
         name: EuroTransit SPA
         publicClient: true
         standardFlowEnabled: true
-        directAccessGrantsEnabled: false
+        # OFF in prod; kind enables it so test accounts can fetch a token via the password grant (curl)
+        directAccessGrantsEnabled: {{ .Values.keycloak.devDirectAccessGrants }}
         redirectUris:
           - https://{{ .Values.global.domain }}/*
+          {{- range .Values.keycloak.frontend.extraRedirectUris }}
+          - {{ . | quote }}
+          {{- end }}
         webOrigins:
           - https://{{ .Values.global.domain }}
+          {{- range .Values.keycloak.frontend.extraWebOrigins }}
+          - {{ . | quote }}
+          {{- end }}
         defaultClientScopes:
           - eurotransit-api
         attributes:
@@ -63,4 +70,25 @@ spec:
         secret: {{ .Values.keycloak.dev.ordersClientSecret | quote }}
         defaultClientScopes:
           - eurotransit-api
+    {{- /* Pre-seeded test accounts (dev/kind only; empty in prod). Passwords are non-temporary so the
+           user logs straight in. Realm roles drive any future role-based checks (USER/ADMIN). */}}
+    {{- with .Values.keycloak.testUsers }}
+    users:
+      {{- range . }}
+      - username: {{ .username | quote }}
+        enabled: true
+        email: {{ .email | quote }}
+        emailVerified: true
+        firstName: {{ .firstName | quote }}
+        lastName: {{ .lastName | quote }}
+        credentials:
+          - type: password
+            value: {{ .password | quote }}
+            temporary: false
+        realmRoles:
+          {{- range .roles }}
+          - {{ . | quote }}
+          {{- end }}
+      {{- end }}
+    {{- end }}
 {{- end }}

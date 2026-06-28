@@ -19,6 +19,28 @@ global:
 keycloak:
   hostname: auth.localhost
   devSecrets: true
+  # let the local Vite frontend (http://localhost:5173) complete the login redirect, and allow the
+  # password grant so test accounts can be exercised from the terminal (curl) — dev only.
+  devDirectAccessGrants: true
+  frontend:
+    extraRedirectUris:
+      - http://localhost:5173/*
+    extraWebOrigins:
+      - http://localhost:5173
+  # ready-to-use logins seeded into the eurotransit realm on a fresh kind cluster (passwords = usernames)
+  testUsers:
+    - username: alice
+      email: alice@eurotransit.test
+      firstName: Alice
+      lastName: Rider
+      password: alice
+      roles: [USER]
+    - username: bob
+      email: bob@eurotransit.test
+      firstName: Bob
+      lastName: Admin
+      password: bob
+      roles: [USER, ADMIN]
 
 # Use locally-built images from the kind local registry (localhost:5001) instead of ACR.
 # Build + push them with `just images-kind`. Base values.yaml keeps the ACR repository for prod.
