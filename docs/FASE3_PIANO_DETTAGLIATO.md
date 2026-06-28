@@ -1,5 +1,11 @@
 # Fase 3 — Piattaforma sul cluster reale: piano tecnico dettagliato
 
+> ✅ **STATO FINALE (2026-06-28): FASE 3 COMPLETATA e verificata sul cluster reale `lab_g03_cluster`.**
+> Esito + evidenze in `docs/traccia/FASI_PROGETTO.md`; runbook operativo in `FASE3_GUIDA_PRATICA.md`. Le 7
+> decisioni D-A..D-G sotto sono confermate e annotate in `docs/design.md §4b`. **D9 (canary) resta aperta → Fase 5.**
+> **Deviazioni dal piano:** registry CI riallineato `etg03registry`→`labg03clusterregistry` (agent-log #14);
+> ClusterIssuer dedup; cert direttamente su `letsencrypt-prod`. Extra provati: money-path CONFIRMED + never-oversell.
+
 > Documento di lavoro del team. Porta il sistema da "tutto locale + chart validata con `helm template`"
 > a **gira davvero su un cluster Kubernetes reale (Azure AKS)**, riconciliato da Argo CD.
 > Ancorato ai file già esistenti (chart, `platform/`, CI) e ai Lab 03/04. Generato il 2026-06-26.
