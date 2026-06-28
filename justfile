@@ -157,6 +157,109 @@ app-verify:
     kubectl --context {{ctx}} -n eurotransit get cluster
     kubectl --context {{ctx}} -n eurotransit get ingress,certificate
 
+# ── local debugging (run a service in your IDE against the cluster) ─────────
+
+# tunnel a service's CNPG primary DB to localhost + print the creds for your IDE run config.
+# Usage: `just db-forward orders`  (or `just db-forward payments 5433` to pick a local port).
+# Set in IntelliJ: profile `postgres`, then the DB_* env vars printed below. Ctrl-C to stop.
+db-forward service local_port="5432":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    secret="{{service}}-db-app"
+    echo "== {{service}} DB — IntelliJ run config (Active profiles: postgres) =="
+    echo "  DB_HOST = localhost"
+    echo "  DB_PORT = {{local_port}}"
+    echo "  DB_NAME = $(kubectl --context {{ctx}} -n eurotransit get secret "$secret" -o jsonpath='{.data.dbname}'   | base64 -d)"
+    echo "  DB_USER = $(kubectl --context {{ctx}} -n eurotransit get secret "$secret" -o jsonpath='{.data.username}' | base64 -d)"
+    echo "  DB_PASS = $(kubectl --context {{ctx}} -n eurotransit get secret "$secret" -o jsonpath='{.data.password}' | base64 -d)"
+    echo
+    echo ">> forwarding svc/{{service}}-db-rw -> localhost:{{local_port}} (Ctrl-C to stop) ..."
+    kubectl --context {{ctx}} -n eurotransit port-forward svc/{{service}}-db-rw {{local_port}}:5432
+
+# tunnel the Strimzi Kafka broker to localhost for IDE debugging of event paths.
+# Usage: `just kafka-forward`  then set KAFKA_BOOTSTRAP=localhost:9092 in your run config. Ctrl-C to stop.
+kafka-forward local_port="9092":
+    @echo ">> set KAFKA_BOOTSTRAP=localhost:{{local_port}} in your IDE run config"
+    @echo ">> forwarding svc/eurotransit-kafka-bootstrap -> localhost:{{local_port}} (Ctrl-C to stop) ..."
+    kubectl --context {{ctx}} -n kafka port-forward svc/eurotransit-kafka-bootstrap {{local_port}}:9092
+
+# ── whole-app local dev (run all 5 services in your IDE, data layer in kind) ─
+# Workflow:  just dev-down   (free the cluster of app pods so they don't fight your local ones)
+#            just dev-forward-all   (leave running in a tab — tunnels every DB + Kafka)
+#            just dev-env           (prints the IntelliJ env block per service)
+#            ...debug in IntelliJ...
+#            just dev-up     (redeploy the pods into the cluster when you're done)
+
+# scale the 5 app Deployments to 0 (DB + Kafka keep running) so local JVMs own the work
+dev-down:
+    kubectl --context {{ctx}} -n eurotransit scale deploy --all --replicas=0
+    @echo ">> app pods scaled to 0. CNPG databases + Kafka still running."
+    @echo ">> next: just dev-forward-all   (new tab)   then   just dev-env"
+
+# restore the app pods in-cluster (helm reconciles each service back to its declared replicas)
+dev-up: app-deploy
+    @echo ">> app pods restored in-cluster."
+
+# background a port-forward for every DB (distinct local ports) + Kafka; Ctrl-C stops them all
+dev-forward-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pids=()
+    cleanup() { echo; echo ">> stopping all port-forwards"; kill "${pids[@]}" 2>/dev/null || true; }
+    trap cleanup EXIT INT TERM
+    fwd() { # $1=localPort:remotePort  $2=namespace  $3=service
+      kubectl --context {{ctx}} -n "$2" port-forward --address 0.0.0.0 "svc/$3" "$1" >/dev/null 2>&1 &
+      pids+=($!); echo "  $3 -> localhost:${1%%:*}"
+    }
+    fwd 5432:5432 eurotransit catalog-db-rw
+    fwd 5433:5432 eurotransit orders-db-rw
+    fwd 5434:5432 eurotransit inventory-db-rw
+    fwd 5435:5432 eurotransit payments-db-rw
+    fwd 9092:9092 kafka       eurotransit-kafka-bootstrap
+    echo ">> all forwards up. Leave this tab running; Ctrl-C to stop them all."
+    wait
+
+# print the IntelliJ env block per service (Active profiles: postgres); live-reads passwords
+dev-env:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pw() { kubectl --context {{ctx}} -n eurotransit get secret "$1-db-app" -o jsonpath='{.data.password}' | base64 -d; }
+    echo "SEMICOLON form -> paste into IntelliJ's *inline* Environment variables field (Active profiles: postgres)."
+    echo "Using .env files instead? run \`just dev-env-files\` (writes one .env per service). Run dev-forward-all first."
+    echo
+    echo "=== catalog (SERVER_PORT 8083) ==="
+    echo "SERVER_PORT=8083;DB_HOST=localhost;DB_PORT=5432;DB_NAME=catalogdb;DB_USER=catalog;DB_PASS=$(pw catalog)"
+    echo
+    echo "=== orders (SERVER_PORT 8080) ==="
+    echo "SERVER_PORT=8080;DB_HOST=localhost;DB_PORT=5433;DB_NAME=ordersdb;DB_USER=orders;DB_PASS=$(pw orders);KAFKA_BOOTSTRAP=localhost:9092;INVENTORY_BASE_URL=http://localhost:8081;PAYMENTS_BASE_URL=http://localhost:8082"
+    echo
+    echo "=== inventory (SERVER_PORT 8081) ==="
+    echo "SERVER_PORT=8081;DB_HOST=localhost;DB_PORT=5434;DB_NAME=inventorydb;DB_USER=inventory;DB_PASS=$(pw inventory);KAFKA_BOOTSTRAP=localhost:9092"
+    echo
+    echo "=== payments (SERVER_PORT 8082) ==="
+    echo "SERVER_PORT=8082;DB_HOST=localhost;DB_PORT=5435;DB_NAME=paymentsdb;DB_USER=payments;DB_PASS=$(pw payments);KAFKA_BOOTSTRAP=localhost:9092"
+    echo
+    echo "=== notifications (SERVER_PORT 8084, no DB) ==="
+    echo "SERVER_PORT=8084;KAFKA_BOOTSTRAP=localhost:9092"
+
+# write one NEWLINE-format .env per service to services/<svc>/.env (gitignored). Point each IDE run config at it.
+dev-env-files:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pw() { kubectl --context {{ctx}} -n eurotransit get secret "$1-db-app" -o jsonpath='{.data.password}' | base64 -d; }
+    emit() { # $1=service, rest=KEY=VALUE lines
+      local svc="$1"; shift
+      local f="{{app_repo}}/services/$svc/.env"
+      : > "$f"; for kv in "$@"; do echo "$kv" >> "$f"; done
+      echo "  wrote $f"
+    }
+    emit catalog       SERVER_PORT=8083 DB_HOST=localhost DB_PORT=5432 DB_NAME=catalogdb   DB_USER=catalog   "DB_PASS=$(pw catalog)"
+    emit orders        SERVER_PORT=8080 DB_HOST=localhost DB_PORT=5433 DB_NAME=ordersdb    DB_USER=orders    "DB_PASS=$(pw orders)"    KAFKA_BOOTSTRAP=localhost:9092 INVENTORY_BASE_URL=http://localhost:8081 PAYMENTS_BASE_URL=http://localhost:8082
+    emit inventory     SERVER_PORT=8081 DB_HOST=localhost DB_PORT=5434 DB_NAME=inventorydb DB_USER=inventory "DB_PASS=$(pw inventory)" KAFKA_BOOTSTRAP=localhost:9092
+    emit payments      SERVER_PORT=8082 DB_HOST=localhost DB_PORT=5435 DB_NAME=paymentsdb  DB_USER=payments  "DB_PASS=$(pw payments)"  KAFKA_BOOTSTRAP=localhost:9092
+    emit notifications SERVER_PORT=8084 KAFKA_BOOTSTRAP=localhost:9092
+    echo ">> set Active profiles: postgres in each run config. These files are gitignored (.env)."
+
 # ── one-shot bootstrap ─────────────────────────────────────────────────────
 
 # full local bootstrap from scratch: cluster + registry + platform (Steps 1-3)
