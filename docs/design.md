@@ -217,7 +217,9 @@ Bringing the system onto a real cluster (Azure AKS), reconciled by Argo CD. Labe
 - **D-F — ACR pull via AKS managed identity** (`az aks update --attach-acr`): no `imagePullSecret` in Git
   (Azure-native, fewer secrets to manage).
 - **D-G — registry `labg03clusterregistry.azurecr.io`**. *Deviation*: the plan cited `lab02g03registry`, which **does
-  not exist** — `values.yaml` and `.github/workflows/ci.yml` were updated to the real registry.
+  not exist**. `values.yaml` (`global.registry` + the five `image.repository`) uses the real registry; the CI had
+  drifted to a third name `etg03registry.azurecr.io` and was **realigned** to `labg03clusterregistry.azurecr.io` so
+  build target == pull source (the CI bumps only `image.tag`, never the repo). See agent-log #14.
 - **Operator versions pinned** (`platform/README.md`, reproducibility — never `latest`): Strimzi **1.0.0** (API `v1`,
   Kafka 4.1.2), CloudNativePG **1.29.1** (≥1.25 ✔ for synchronous replication); Traefik / cert-manager / Sealed
   Secrets / Argo CD were already bootstrapped on the cluster by the earlier labs.

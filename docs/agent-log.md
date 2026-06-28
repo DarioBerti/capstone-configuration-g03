@@ -287,6 +287,29 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   Traefik LB IP (the old `158.158.71.17` belonged to the prior cluster). Phase-2 resilience was re-applied onto the
   layer-folder layout on `app` branch `fase-3-consolidation` (all 5 services compile; Testcontainers run pending).
 
+## 14. Phase 3 — CI pushed to a registry the chart never pulls from (a fifth consolidation regression)
+
+- **Found (2026-06-28):** a follow-up audit of the GitOps loop, after #13, surfaced a defect #13 missed:
+  `app/.github/workflows/ci.yml` built and pushed to `env.REGISTRY: etg03registry.azurecr.io`, while the chart
+  pulls every service from `labg03clusterregistry.azurecr.io` (`deploy/charts/eurotransit/values.yaml`
+  `global.registry` + the five `services.*.image.repository`). A **third** registry name on top of the
+  `lab02g03registry` ghost already corrected in #13.
+- **Why wrong:** the CI bumps **only** `services.<svc>.image.tag`, never the repository — by design (immutable
+  image, tag is the single CI-mutated field). So even on a green pipeline Argo CD would reconcile the chart to
+  `labg03clusterregistry/eurotransit/<svc>:<sha>`, an image that was pushed to `etg03registry` and therefore does
+  **not exist** there → `ImagePullBackOff` → the app never reaches Healthy. This is precisely the symptom logged in
+  `FASI_PROGETTO.md` ("Argo Synced&Healthy bloccato su immagini ACR"): the blocker was a config split-brain, not a
+  missing image build. A pipeline whose output address differs from what the deployer reads is dead on arrival
+  (deck 08: build and deploy must agree on the artifact coordinate, not just the tag).
+- **How caught:** read-only cross-repo diff of the image coordinate — `env.REGISTRY` in `ci.yml` vs `global.registry`
+  + `image.repository` in `values.yaml` — not by CI (no job asserts the two registries match).
+- **Fix:** `ci.yml` `REGISTRY` aligned to `labg03clusterregistry.azurecr.io` (the registry attached to the cluster
+  per D-G; `ACR_USERNAME/ACR_PASSWORD` secrets must belong to it). Also **completed #13's open item**: the duplicate
+  `platform/cert-manager/clusterissuer-prod.yaml` was deleted, leaving `clusterissuer.yaml` (staging+prod, real
+  email) as the single AKS source — which also fits the staging→prod issuance chosen for the first cert.
+  Open follow-up (not code): the `158.158.71.17.sslip.io` in `values.yaml` belonged to the **prior** cluster (#13);
+  it must be re-confirmed against the live Traefik LB IP after `az aks start` before issuing the cert.
+
 ---
 
 _Add new entries as they happen. Aim well past the required three; every caught mistake is
