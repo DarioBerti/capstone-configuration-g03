@@ -191,15 +191,45 @@ is needed *now*.
     live in orders-db). payments-db and catalog-db: single instance (see decision 1).
     Requires CNPG ≥ 1.25.
 
+## 4b. Phase 3 — platform decisions (D-A…D-G; team 2026-06-26, deviations verified on the real cluster 2026-06-28)
+
+Bringing the system onto a real cluster (Azure AKS), reconciled by Argo CD. Labels match `docs/FASE3_*`.
+
+- **D-A — one shared AKS cluster** (`lab_g03_cluster`, RG `lab02_g03_group`, region `spaincentral`); every member
+  added as *Cluster Admin*, not one cluster per person — a single cluster keeps more shared student credit for the
+  work/demo days instead of burning it in parallel.
+- **D-B — `az aks stop` when idle** (deallocate the nodes, do not destroy): the one decision that keeps the project
+  inside the budget — running h24 ≈ 8€/day vs cents/day stopped (data persists on disk, restart ~3-5 min).
+- **D-C — node pool: 3× `Standard_B2s_v2`** (6 vCPU / 24 GiB). *Deviation from the theoretical 2× `B4ms`*: the
+  regional quota is only **6 vCPU** and `B4ms`/`B4s_v2` are unavailable in `spaincentral`, so 3× `B2s_v2` is the
+  in-quota fit — covers the ~3.3 vCPU / ~9 GiB of requests with RAM headroom, and 3 nodes are actually better for
+  the topology-spread / PDB demos. Caveat (Phase 6): a chaos node-kill leaves 4 vCPU → some pods `Pending`, itself a
+  documented finding.
+- **D-D — platform installed by hand** (`helm`/`kubectl`, once); **only the `eurotransit` app goes through Argo CD**
+  (no app-of-apps — operators are "install once"; the track asks for the *app* Synced & Healthy).
+- **D-E — free IP-based TLS**: hostname `<TraefikIP>.sslip.io` + Let's Encrypt HTTP-01, no purchased domain. The
+  chart's `global.domain: g03.cpo2026.it` was a **placeholder** → replaced with the sslip.io host at bootstrap; the
+  `letsencrypt-prod` ClusterIssuer referenced by the Ingress is created in `platform/cert-manager/`.
+- **D-F — ACR pull via AKS managed identity** (`az aks update --attach-acr`): no `imagePullSecret` in Git
+  (Azure-native, fewer secrets to manage).
+- **D-G — registry `labg03clusterregistry.azurecr.io`**. *Deviation*: the plan cited `lab02g03registry`, which **does
+  not exist** — `values.yaml` and `.github/workflows/ci.yml` were updated to the real registry.
+- **Operator versions pinned** (`platform/README.md`, reproducibility — never `latest`): Strimzi **1.0.0** (API `v1`,
+  Kafka 4.1.2), CloudNativePG **1.29.1** (≥1.25 ✔ for synchronous replication); Traefik / cert-manager / Sealed
+  Secrets / Argo CD were already bootstrapped on the cluster by the earlier labs.
+- **No SealedSecret needed in Phase 3** *(by design, not an omission)*: DB credentials are generated in-cluster by
+  CNPG (`<db>-app`), and image pull uses the managed identity (D-F). A SealedSecret returns only if a real
+  application secret is introduced (e.g. a real PSP token — the PSP is mocked today).
+
 ## 5. Open decisions (awaiting teammate feedback)
 - ~~D1 granularity~~ → **resolved 2026-06-09** (team feedback): dedicated HA clusters for
   Orders & Inventory; small dedicated single-instance clusters for Payments and Catalog
   (rationale in #4.1; replication posture in #4.12).
 - D2: include a minimal gateway auth check at all?
-- D9: stick to TraefikService, or also evaluate Argo Rollouts for canary automation?
-- D12 variant to confirm with the team: inventory-db at 3 instances (chosen: survives one
-  replica loss without blocking writes) vs 2 instances (1 pod less, but any standby outage
-  blocks writes — purer CP, harsher availability).
+- D9: stick to TraefikService, or also evaluate Argo Rollouts for canary automation? *(decided in Phase 5; for
+  Phase 3 it only adds the Argo Rollouts controller as an extra operator if chosen — does not block the bootstrap.)*
+- ~~D12 variant (inventory-db 3 vs 2 instances)~~ → **resolved: stays at 3** (survives one replica loss without
+  blocking writes; confirmed in the Phase 3 plan, no chart change).
 
 ## 6. Async cost analysis (Pillar A) — to complete
 Where async reduces cost/scaling pressure in EuroTransit (I/O-bound waits: waiting on Payments,
