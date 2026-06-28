@@ -310,6 +310,41 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   Open follow-up (not code): the `158.158.71.17.sslip.io` in `values.yaml` belonged to the **prior** cluster (#13);
   it must be re-confirmed against the live Traefik LB IP after `az aks start` before issuing the cert.
 
+## 15. Phase 2 #7 — a new `@SpringBootTest` guard leaked shared-context state into a sibling test
+
+- **What the agent produced:** `MetricCardinalityGuardTest` (orders, §7.3 low-cardinality guard). To register a
+  real shed counter it shrank the intake budget via inlined `@SpringBootTest(properties=[… ratelimiter…
+  limit-for-period=1 …])` — copying the **exact** property set already used by `OrdersIntakeRateLimiterTest`.
+- **Why wrong:** Spring's test context cache keys on the merged config (inlined properties included). Identical
+  properties → both classes **share one cached context** → one singleton `RateLimiter("orders-intake")`. The guard
+  consumed the single per-window permit, so when the sibling ran in the same context its first `place()` (expected
+  `202 ACCEPTED`) was shed → `OrdersIntakeRateLimiterTest` failed. Green in isolation, red in the full suite — the
+  worst kind: a test that only fails when run with its neighbours.
+- **How caught:** running the **whole** orders suite, not just the two new tests (`./gradlew test` → `34 tests,
+  1 failed`). Running only the new tests had passed and would have shipped the leak.
+- **Fix:** made the guard's property set **distinct** (`limit-for-period=2`, consume 2 then shed) so it gets its
+  **own** cached context — no shared singleton, no leak. Lesson: an inlined-property `@SpringBootTest` that mutates
+  a singleton (rate limiter / breaker / registry) must not share a context with tests that assert on that
+  singleton's fresh state; vary the config or `@DirtiesContext`.
+- **Related (not a bug, a doc nuance):** the §7.5 note first claimed "`kubectl logs` shows JSON" as if already live.
+  The cluster runs the Fase-3 image (`3af035e`), predating the structured-logging config → live logs are still
+  plain; JSON ECS appears only after a CI rebuild. Doc corrected to say "post-deploy".
+
+## 16. Phase 2 #6 live validation — topology spread is `ScheduleAnyway` (soft), so it co-located both payments replicas
+
+- **What surfaced:** during the live §6 validation, `kubectl get pods -o wide` showed **both** `payments` replicas
+  on the same node (`…00000d`), despite a `topologySpreadConstraints{maxSkew:1, topologyKey: hostname}`.
+- **Why it matters:** the constraint uses `whenUnsatisfiable: ScheduleAnyway` → it is a **preference**, not a
+  guarantee. The scheduler packed both pods on one node; a single node failure would take out the entire payments
+  capacity — exactly the failure-domain co-location the spread is meant to prevent (deck 11: "replication protects
+  only if replicas are across independent failure domains").
+- **How caught:** reading live pod placement against node identity (not assuming the manifest's intent equals the
+  runtime result). The chart *had* the constraint; only the live cluster revealed it wasn't binding.
+- **Decision (team-owned, not auto-applied):** `DoNotSchedule` would make the spread a hard guarantee, but on a
+  3-node cluster it risks unschedulable pods during a drain/upgrade. Trade-off availability vs hard anti-affinity —
+  left as a documented finding for the team to resolve in `deploy/charts/eurotransit` + `docs/design.md`, not
+  silently changed by the agent.
+
 ---
 
 _Add new entries as they happen. Aim well past the required three; every caught mistake is

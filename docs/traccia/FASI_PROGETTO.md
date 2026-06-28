@@ -7,14 +7,19 @@ Questo documento è la **mappa di avanzamento** condivisa: dice a che punto siam
 > `labg03clusterregistry` (era `etg03registry`, vedi agent-log #14), CI verde (tag `3af035e` in ACR + bump su config
 > main), Argo CD **Synced & Healthy**, drift selfHeal+prune dimostrati, replica **sincrona** CNPG (inventory/orders
 > `sync_state=quorum`, RPO=0), secret `<db>-app` iniettati, TLS Let's Encrypt **prod** su `158.158.71.17.sslip.io`,
-> money-path `POST /api/orders` → **CONFIRMED**. Restano: salvare evidenze (screenshot) e `az aks stop`.**
+> money-path `POST /api/orders` → **CONFIRMED**.
+> **Fase 2 §6+§7 CHIUSI (28/06/2026):** §6 validato **live** sul cluster (6.1 probe readiness=db+readinessState senza kafka; 6.2 PDB
+> regge un `drain` con money-path mai a 0 + failover CNPG pulito; 6.4 HPA solo catalog/orders; 6.5 graceful shutdown = 45/45 `202`
+> + log `cooperative shutdown`; 6.6 notifications=0 → checkout CONFIRMED). §7-codice fatto (structured logging ECS + coerenza
+> metriche + guard low-cardinality). **Finding §6.3:** topology spread soft (`ScheduleAnyway`) → payments co-locate su un nodo
+> (rivedere `DoNotSchedule`). §7.2 dashboard / §7.4 alert = Fase 4. Cluster **fermato** (`az aks stop`) a fine validazione.**
 
 Legenda stato: ✅ fatto · 🔄 in corso · 🔜 prossima · ⬜ da fare
 
 ```text
  Fase 0  Fondamenta            ✅
  Fase 1  Core money path       ✅   ← codice dei 5 servizi, tutti i test verdi
- Fase 2  Resilienza            ✅   ← CB/bulkhead/retry/429/void + test (da consolidare su main)
+ Fase 2  Resilienza            ✅   ← CB/bulkhead/retry/429/void + test; §6 validato LIVE + §7-codice (28/06/2026)
  Fase 3  Piattaforma su cluster ✅   ← verificata sul cluster reale (2026-06-28): Argo Synced&Healthy, sync CNPG, money-path CONFIRMED
  Fase 4  Observability         ⬜
  Fase 5  Progressive delivery  ⬜
