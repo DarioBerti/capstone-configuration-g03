@@ -10,3 +10,4 @@ Thumbs.db
 # Never commit plaintext secrets — only SealedSecrets belong in Git
 *-secret.yaml
 !*-sealedsecret.yaml
+bootstrap/certs/

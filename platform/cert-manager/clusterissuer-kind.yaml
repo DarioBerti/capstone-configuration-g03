@@ -1,0 +1,13 @@
+# Self-signed ClusterIssuer for LOCAL kind.
+# cert-manager mints certificates instantly with no external validation — the right choice when
+# the cluster isn't publicly reachable (Let's Encrypt's HTTP-01 challenge cannot work on a laptop).
+#
+# The app chart's Ingress selects this via global.clusterIssuer: selfsigned (values-kind.yaml).
+# Browsers show these certs as "not trusted" — expected for local dev; the goal is to exercise
+# the same Ingress -> Secret(eurotransit-tls) -> Traefik TLS path as production.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}

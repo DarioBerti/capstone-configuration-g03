@@ -1,0 +1,39 @@
+# EuroTransit app chart — LOCAL kind overlay. Layered on top of values.yaml:
+#   helm ... -f values.yaml -f values-kind.yaml
+# Only settings that differ on a laptop cluster belong here.
+
+global:
+  # Let's Encrypt can't validate g03.cpo2026.it against a laptop, so locally we sign the
+  # Ingress TLS cert with cert-manager's self-signed ClusterIssuer. The browser will warn
+  # "not trusted" — expected; the point is to exercise the same TLS plumbing as production.
+  clusterIssuer: selfsigned
+
+# Use locally-built images from the kind local registry (localhost:5001) instead of ACR.
+# Build + push them with `just images-kind`. Base values.yaml keeps the ACR repository for prod.
+# pullPolicy: Always so a rebuilt :dev image is re-pulled on the next pod restart (dev loop).
+services:
+  catalog:
+    image:
+      repository: localhost:5001/eurotransit/catalog
+      tag: dev
+      pullPolicy: Always
+  orders:
+    image:
+      repository: localhost:5001/eurotransit/orders
+      tag: dev
+      pullPolicy: Always
+  inventory:
+    image:
+      repository: localhost:5001/eurotransit/inventory
+      tag: dev
+      pullPolicy: Always
+  payments:
+    image:
+      repository: localhost:5001/eurotransit/payments
+      tag: dev
+      pullPolicy: Always
+  notifications:
+    image:
+      repository: localhost:5001/eurotransit/notifications
+      tag: dev
+      pullPolicy: Always

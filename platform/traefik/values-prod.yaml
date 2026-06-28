@@ -1,0 +1,26 @@
+# Traefik overlay for a REAL cloud cluster (e.g. AKS). Layered on top of values.yaml.
+#
+# A real cluster has a cloud LoadBalancer and no reason to pin Traefik to a specific node,
+# so we DROP all the kind glue (nodeSelector / tolerations / hostPort) and expose Traefik
+# through a cloud L4 LoadBalancer instead. The app-facing settings stay in values.yaml.
+
+deployment:
+  # HA: more than one replica so a single node loss can't take ingress fully down
+  replicas: 2
+
+# the cloud provisions a real external IP / L4 load balancer for north-south traffic.
+# Point the public DNS record (e.g. g03.cpo2026.it) at the IP this Service receives.
+service:
+  type: LoadBalancer
+
+# Spread the replicas across nodes so one node loss can't drop both.
+# Once the cluster is multi-AZ, add a second constraint on topology.kubernetes.io/zone.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
