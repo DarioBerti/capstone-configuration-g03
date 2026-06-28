@@ -7,7 +7,7 @@ global:
   # image path prefix: full image = <registry>/<imagePrefix>/<service>
   imagePrefix: eurotransit
   # public host the Ingress serves (TLS cert is issued for this name)
-  domain: g03.cpo2026.it
+  domain: 158.158.71.17.sslip.io
   # cert-manager ClusterIssuer that signs the Ingress TLS cert (Secret eurotransit-tls).
   # Default = real Let's Encrypt (Argo CD / prod render base values.yaml only).
   # Local kind overrides this to "selfsigned" in values-kind.yaml (LE can't validate a laptop).
