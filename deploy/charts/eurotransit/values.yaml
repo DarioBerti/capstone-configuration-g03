@@ -14,7 +14,6 @@ global:
   clusterIssuer: letsencrypt-prod
   # Kafka bootstrap exposed by the Strimzi-managed cluster (platform namespace)
   kafkaBootstrap: eurotransit-kafka-bootstrap.kafka.svc:9092
-
 # Per-service desired state
 # "db" references a database name in ".databases" (or null)
 # "criticalPath" marks services on the money path (drives PDBs / spread / stricter SLOs)
@@ -24,7 +23,7 @@ services:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
       repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
-      tag: latest
+      tag: 3af035e
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
     # baseline replica count (also the HPA floor / PDB reference)
@@ -43,11 +42,10 @@ services:
       minReplicas: 2
       maxReplicas: 4
       targetCPUUtilizationPercentage: 70
-
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: latest
+      tag: 3af035e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -65,11 +63,10 @@ services:
       minReplicas: 2
       maxReplicas: 4
       targetCPUUtilizationPercentage: 70
-
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: latest
+      tag: 3af035e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -79,11 +76,10 @@ services:
     # Deliberately NO HPA: the bottleneck is the single contended row in PostgreSQL, not service CPU -> more replicas would not increase reservation throughput
     hpa:
       enabled: false
-
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: latest
+      tag: 3af035e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -93,11 +89,10 @@ services:
     # Deliberately NO HPA: work is I/O-bound on the (mock) PSP + idempotency store
     hpa:
       enabled: false
-
   notifications:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/notifications
-      tag: latest
+      tag: 3af035e
       pullPolicy: IfNotPresent
     # single replica: this service is allowed to be fully down (graceful degradation)
     replicaCount: 1
@@ -109,9 +104,6 @@ services:
     # Allowed to fail entirely (graceful degradation): one replica, no HPA, no PDB
     hpa:
       enabled: false
-
-
-
 # CloudNativePG Cluster CRs (operator is platform-level). One DB per data-owning service!
 #
 # Replication posture = our PACELC statement made real: CNPG replicates ASYNCHRONOUSLY by default, which means a failover can lose the last committed transactions (RPO > 0). For inventory that would break "never oversell" exactly under chaos experiment #5 (a committed reservation vanishes, the seat counter rolls back, the seat is sold twice). Hence:
@@ -125,10 +117,7 @@ services:
 #   - catalog-db: single instance; staleness-tolerant by definition
 #
 # NOTE: `postgresql.synchronous` requires CloudNativePG >= 1.25
-
-
 databases:
-
   catalog-db:
     # single instance: a read store that tolerates staleness needs no HA
     instances: 1
@@ -136,7 +125,6 @@ databases:
     database: catalogdb
     # role that owns the schema (matches the app's DB_USER)
     owner: catalog
-
   orders-db:
     # 2 instances: primary + one standby for fast failover
     instances: 2
@@ -147,7 +135,6 @@ databases:
       method: any
       number: 1
       dataDurability: preferred
-
   inventory-db:
     # 3 instances: survive losing ONE replica without blocking writes (the invariant store)
     instances: 3
@@ -158,13 +145,11 @@ databases:
       method: any
       number: 1
       dataDurability: required
-  
   payments-db:
     # single instance: correctness is the idempotency table, not replication (team decision)
     instances: 1
     database: paymentsdb
     owner: payments
-
 # Default container resources for the services (no CPU limit: avoid throttling spikes; memory limit bounds the JVM blast radius)
 resources:
   # guaranteed share the scheduler reserves
@@ -174,7 +159,6 @@ resources:
   # hard ceiling (memory only -> a CPU limit would throttle latency-sensitive spikes)
   limits:
     memory: 512Mi
-
 # Resources for every PostgreSQL instance (applied to all Cluster CRs)
 databaseResources:
   requests:
