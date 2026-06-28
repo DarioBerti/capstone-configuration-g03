@@ -47,7 +47,38 @@ spec:
     initdb:
       database: {{ $db.database }}
       owner: {{ $db.owner }}
+  {{- /* Extra CNPG-managed login roles on this cluster (e.g. Keycloak sharing catalog-db). The role's password is taken from the named secret (username/password keys). Requires CNPG >= 1.25. */}}
+  {{- if $db.managedRoles }}
+  managed:
+    roles:
+      {{- range $role := $db.managedRoles }}
+      - name: {{ $role.name }}
+        ensure: present
+        login: true
+        passwordSecret:
+          name: {{ $role.secret }}
+      {{- end }}
+  {{- end }}
   # Enable Prometheus metrics so the DB appears in USE/Golden-Signals dashboards (Pillar D)
   monitoring:
     enablePodMonitor: true
+{{- /* Extra databases on this same cluster, declared via the CNPG Database CR (requires CNPG >= 1.25). Used so Keycloak gets its own DB on the shared catalog-db instance without a dedicated cluster. */}}
+{{- range $extra := (dig "extraDatabases" (list) $db) }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: {{ $extra.name }}
+  labels:
+    app.kubernetes.io/part-of: eurotransit
+    app.kubernetes.io/name: {{ $extra.name }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  # the CNPG Cluster that hosts this database
+  cluster:
+    name: {{ $name }}
+  name: {{ $extra.name }}
+  owner: {{ $extra.owner }}
+{{- end }}
 {{- end }}

@@ -42,3 +42,11 @@ spec:
                 name: orders
                 port:
                   number: {{ .Values.services.orders.port }}
+          # /api/users/** -> the Users service (self-service profile; the SPA calls it with the user token)
+          - path: /api/users
+            pathType: Prefix
+            backend:
+              service:
+                name: users
+                port:
+                  number: {{ .Values.services.users.port }}

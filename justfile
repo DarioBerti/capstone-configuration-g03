@@ -14,7 +14,7 @@ local_registry := "localhost:5001"
 app_repo       := "../capstone-application-g03"
 image_prefix   := "eurotransit"
 img_tag        := "dev"
-services       := "catalog orders inventory payments notifications"
+services       := "catalog orders inventory payments notifications users"
 
 # default recipe: list everything
 default:
@@ -134,6 +134,21 @@ strimzi-install:
 # apply the LOCAL single-node Kafka cluster + topics (kind only; prod uses kafka.yaml + kafka-topics.yaml)
 kafka-kind-apply:
     kubectl --context {{ctx}} apply -f platform/strimzi/kafka-kind.yaml
+
+# install the Keycloak Operator (CRDs + controller) into the eurotransit namespace. MUST run before
+# `app-deploy` so the chart's Keycloak/KeycloakRealmImport CRs have their CRDs. -k uses the kustomize base.
+keycloak-install:
+    kubectl --context {{ctx}} create namespace eurotransit --dry-run=client -o yaml | kubectl --context {{ctx}} apply -f -
+    kubectl --context {{ctx}} apply -k platform/keycloak/operator
+    @echo ">> waiting for the Keycloak CRDs to register ..."
+    kubectl --context {{ctx}} wait --for=condition=established --timeout=120s \
+      crd/keycloaks.k8s.keycloak.org crd/keycloakrealmimports.k8s.keycloak.org
+
+# verify Keycloak: operator running, the Keycloak CR + realm import reconciled, login ingress present
+keycloak-verify:
+    kubectl --context {{ctx}} -n eurotransit get pods -l app.kubernetes.io/name=keycloak-operator
+    kubectl --context {{ctx}} -n eurotransit get keycloak,keycloakrealmimport
+    kubectl --context {{ctx}} -n eurotransit get ingress keycloak
 
 # verify Step 3: CRDs present, operators Running, Kafka cluster + topics Ready
 data-verify:
@@ -262,9 +277,9 @@ dev-env-files:
 
 # ── one-shot bootstrap ─────────────────────────────────────────────────────
 
-# full local bootstrap from scratch: cluster + registry + platform (Steps 1-3)
-bootstrap-kind: cluster-up registry-up traefik-install certmanager-install cnpg-install strimzi-install kafka-kind-apply
-    @echo ">> kind cluster + registry + platform ready."
+# full local bootstrap from scratch: cluster + registry + platform (Steps 1-3) + Keycloak operator
+bootstrap-kind: cluster-up registry-up traefik-install certmanager-install cnpg-install strimzi-install kafka-kind-apply keycloak-install
+    @echo ">> kind cluster + registry + platform + Keycloak operator ready."
     @echo ">> next:  just images-kind   &&   just app-deploy"
 
 # ── platform: next steps (add recipes as we install each) ───────────────────

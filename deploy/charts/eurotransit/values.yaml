@@ -14,6 +14,41 @@ global:
   clusterIssuer: letsencrypt-prod
   # Kafka bootstrap exposed by the Strimzi-managed cluster (platform namespace)
   kafkaBootstrap: eurotransit-kafka-bootstrap.kafka.svc:9092
+  # OIDC contract injected into every secured service (validates Keycloak JWTs). The `issuer` MUST equal
+  # the `iss` claim Keycloak stamps on tokens (the public frontend URL); jwkSetUri/tokenUri point at the
+  # same public realm. kind overrides these in values-kind.yaml.
+  oidc:
+    issuer: https://auth.g03.cpo2026.it/realms/eurotransit
+    jwkSetUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/certs
+    tokenUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/token
+
+# Keycloak (OIDC identity provider), run by the Keycloak Operator (installed separately as a platform
+# component — see platform/argocd/keycloak-operator-application.yaml). The Keycloak CR + realm import live
+# in THIS chart so they share the eurotransit namespace and the shared catalog Postgres instance.
+keycloak:
+  enabled: true
+  # Quarkus distribution image the operator runs
+  image: quay.io/keycloak/keycloak:26.0
+  instances: 1
+  # public host for the login UI (cert-manager issues its TLS cert); kind overrides this
+  hostname: auth.g03.cpo2026.it
+  # Keycloak's database lives on the SHARED catalog-db CNPG cluster (see databases.catalog-db below):
+  # this is the host/db Keycloak connects to and the secret holding its DB role credentials.
+  db:
+    host: catalog-db-rw.eurotransit.svc
+    name: keycloakdb
+    secret: keycloak-db            # keys: username, password (also used by the CNPG managed role)
+  # secret holding the bootstrap admin user (keys: username, password)
+  adminSecret: keycloak-initial-admin
+  # LOCAL-ONLY: render plain Secrets so kind works without kubeseal. MUST stay false in this base file;
+  # in prod the three secrets (keycloak-db, keycloak-initial-admin, orders-oidc) are committed as
+  # SealedSecrets (see platform/keycloak/README.md). values-kind.yaml flips this to true.
+  devSecrets: false
+  dev:
+    adminUsername: admin
+    adminPassword: admin
+    dbPassword: keycloak-dev-pass
+    ordersClientSecret: dev-orders-svc-secret
 
 # Per-service desired state
 # "db" references a database name in ".databases" (or null)
@@ -33,6 +68,8 @@ services:
     port: 8080
     # the CloudNativePG database this service owns (see "databases" below)
     db: catalog-db
+    # OAuth2 resource server -> inject the OIDC env (global.oidc) so it validates Keycloak JWTs
+    secured: true
     # NOT on the money path -> no PDB, no topology spread, looser SLOs
     criticalPath: false
     # does not produce/consume Kafka events -> no KAFKA_BOOTSTRAP injected
@@ -55,6 +92,13 @@ services:
     # on the money path -> gets a PDB + topology spread
     criticalPath: true
     usesKafka: true
+    # validates inbound user JWTs (resource server)
+    secured: true
+    # Orders also CALLS Inventory/Payments off the request thread (Kafka saga), so it mints a service token
+    # via client credentials. clientId + the secret holding its client-secret (key: client-secret).
+    oidcClient:
+      clientId: orders-svc
+      secretName: orders-oidc
     # The saga's synchronous decision calls (Orders -> Inventory/Payments) go to the in-cluster Service DNS names; locally the app falls back to localhost ports
     extraEnv:
       INVENTORY_BASE_URL: http://inventory:8080
@@ -76,6 +120,7 @@ services:
     db: inventory-db
     criticalPath: true
     usesKafka: true
+    secured: true
     # Deliberately NO HPA: the bottleneck is the single contended row in PostgreSQL, not service CPU -> more replicas would not increase reservation throughput
     hpa:
       enabled: false
@@ -90,6 +135,7 @@ services:
     db: payments-db
     criticalPath: true
     usesKafka: true
+    secured: true
     # Deliberately NO HPA: work is I/O-bound on the (mock) PSP + idempotency store
     hpa:
       enabled: false
@@ -106,9 +152,32 @@ services:
     db: null
     criticalPath: false
     usesKafka: true
+    # Notifications has no inbound business REST API (Kafka-only) -> nothing to protect with a token
+    secured: false
     # Allowed to fail entirely (graceful degradation): one replica, no HPA, no PDB
     hpa:
       enabled: false
+
+  users:
+    image:
+      repository: lab02g03registry.azurecr.io/eurotransit/users
+      tag: latest
+      pullPolicy: IfNotPresent
+    replicaCount: 2
+    port: 8080
+    # owns its own database (app-side profiles keyed by the Keycloak subject)
+    db: users-db
+    # OAuth2 resource server -> validates Keycloak JWTs; provisions profiles just-in-time
+    secured: true
+    # off the money path (profiles are not part of checkout)
+    criticalPath: false
+    usesKafka: false
+    # self-service profile reads scale with logged-in browse traffic
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 4
+      targetCPUUtilizationPercentage: 70
 
 
 
@@ -136,6 +205,14 @@ databases:
     database: catalogdb
     # role that owns the schema (matches the app's DB_USER)
     owner: catalog
+    # Keycloak SHARES this lower-tier instance (team decision): an extra CNPG-managed login role +
+    # a declarative Database on the SAME cluster. Password comes from the keycloak-db secret.
+    managedRoles:
+      - name: keycloak
+        secret: keycloak-db        # keys: username, password
+    extraDatabases:
+      - name: keycloakdb
+        owner: keycloak
 
   orders-db:
     # 2 instances: primary + one standby for fast failover
@@ -164,6 +241,12 @@ databases:
     instances: 1
     database: paymentsdb
     owner: payments
+
+  users-db:
+    # single instance: profile data is not on the money path and tolerates a short failover
+    instances: 1
+    database: usersdb
+    owner: users
 
 # Default container resources for the services (no CPU limit: avoid throttling spikes; memory limit bounds the JVM blast radius)
 resources:

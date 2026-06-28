@@ -7,6 +7,18 @@ global:
   # Ingress TLS cert with cert-manager's self-signed ClusterIssuer. The browser will warn
   # "not trusted" — expected; the point is to exercise the same TLS plumbing as production.
   clusterIssuer: selfsigned
+  # Local OIDC: tokens are issued for the kind ingress host (auth.localhost), but the services fetch
+  # JWKS / mint service tokens over the in-cluster Service DNS (no ingress/TLS hairpin on a laptop).
+  oidc:
+    issuer: https://auth.localhost/realms/eurotransit
+    jwkSetUri: http://keycloak-service.eurotransit.svc:8080/realms/eurotransit/protocol/openid-connect/certs
+    tokenUri: http://keycloak-service.eurotransit.svc:8080/realms/eurotransit/protocol/openid-connect/token
+
+# Local Keycloak: render plaintext dev secrets (no kubeseal on a laptop) and serve the login UI on the
+# kind ingress host. Prod keeps devSecrets=false and uses committed SealedSecrets.
+keycloak:
+  hostname: auth.localhost
+  devSecrets: true
 
 # Use locally-built images from the kind local registry (localhost:5001) instead of ACR.
 # Build + push them with `just images-kind`. Base values.yaml keeps the ACR repository for prod.
@@ -35,5 +47,10 @@ services:
   notifications:
     image:
       repository: localhost:5001/eurotransit/notifications
+      tag: dev
+      pullPolicy: Always
+  users:
+    image:
+      repository: localhost:5001/eurotransit/users
       tag: dev
       pullPolicy: Always

@@ -1,0 +1,66 @@
+{{- /*
+Declarative realm import: the operator creates/updates the `eurotransit` realm and its clients on the
+Keycloak instance above. Two clients:
+  - eurotransit-frontend : PUBLIC SPA client (Authorization Code + PKCE) used by the React frontend.
+  - orders-svc           : CONFIDENTIAL service client (client credentials) Orders uses to call its
+                           siblings off the Kafka thread. Its secret MUST equal the orders-oidc secret
+                           that Orders reads (keep them in sync; in prod both come from the same value).
+An audience mapper stamps `eurotransit-api` into tokens so resource servers can check the audience.
+
+WARNING: a realm import only seeds the realm; it does not continuously reconcile every field. Treat it
+as bootstrap. Do NOT commit a real orders-svc secret here — override keycloak.dev.ordersClientSecret via
+a private overlay in prod (see platform/keycloak/README.md).
+*/ -}}
+{{- if .Values.keycloak.enabled }}
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: eurotransit-realm
+  labels:
+    app.kubernetes.io/part-of: eurotransit
+    app.kubernetes.io/name: keycloak
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  keycloakCRName: keycloak
+  realm:
+    realm: eurotransit
+    enabled: true
+    roles:
+      realm:
+        - name: USER
+        - name: ADMIN
+    clientScopes:
+      - name: eurotransit-api
+        protocol: openid-connect
+        protocolMappers:
+          - name: eurotransit-audience
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: eurotransit-api
+              access.token.claim: "true"
+              id.token.claim: "false"
+    clients:
+      - clientId: eurotransit-frontend
+        name: EuroTransit SPA
+        publicClient: true
+        standardFlowEnabled: true
+        directAccessGrantsEnabled: false
+        redirectUris:
+          - https://{{ .Values.global.domain }}/*
+        webOrigins:
+          - https://{{ .Values.global.domain }}
+        defaultClientScopes:
+          - eurotransit-api
+        attributes:
+          pkce.code.challenge.method: S256
+      - clientId: {{ .Values.services.orders.oidcClient.clientId }}
+        name: Orders service account
+        publicClient: false
+        standardFlowEnabled: false
+        serviceAccountsEnabled: true
+        secret: {{ .Values.keycloak.dev.ordersClientSecret | quote }}
+        defaultClientScopes:
+          - eurotransit-api
+{{- end }}
