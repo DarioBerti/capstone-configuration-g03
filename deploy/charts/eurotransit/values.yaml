@@ -22,6 +22,20 @@ global:
     jwkSetUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/certs
     tokenUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/token
 
+# Debug SPA hosted IN-CLUSTER (nginx serving the Vite build). DEV/kind convenience so the app can be
+# exercised end-to-end without running services locally; the ingress (gated on the same flag) also adds
+# the SPA's "/" route plus the internal /api/inventory + /api/payments prefixes. OFF in base/prod: the
+# SPA is served elsewhere there and Inventory/Payments stay internal. values-kind.yaml flips this on.
+frontend:
+  enabled: false
+  image:
+    repository: lab02g03registry.azurecr.io/eurotransit/frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  # cluster Service port (nginx listens on 80 inside the pod)
+  port: 80
+
 # Keycloak (OIDC identity provider), run by the Keycloak Operator (installed separately as a platform
 # component — see platform/argocd/keycloak-operator-application.yaml). The Keycloak CR + realm import live
 # in THIS chart so they share the eurotransit namespace and the shared catalog Postgres instance.
@@ -38,10 +52,12 @@ keycloak:
     host: catalog-db-rw.eurotransit.svc
     name: keycloakdb
     secret: keycloak-db            # keys: username, password (also used by the CNPG managed role)
-  # secret holding the bootstrap admin user (keys: username, password)
-  adminSecret: keycloak-initial-admin
+  # secret holding the bootstrap admin user (keys: username, password). MUST NOT be named
+  # "<keycloak-cr-name>-initial-admin" (i.e. keycloak-initial-admin): that name is reserved for the
+  # secret the operator generates itself, and a collision makes the operator's reconcile 409 and abort.
+  adminSecret: keycloak-bootstrap-admin
   # LOCAL-ONLY: render plain Secrets so kind works without kubeseal. MUST stay false in this base file;
-  # in prod the three secrets (keycloak-db, keycloak-initial-admin, orders-oidc) are committed as
+  # in prod the three secrets (keycloak-db, keycloak-bootstrap-admin, orders-oidc) are committed as
   # SealedSecrets (see platform/keycloak/README.md). values-kind.yaml flips this to true.
   devSecrets: false
   dev:

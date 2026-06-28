@@ -3,9 +3,13 @@
 # Only settings that differ on a laptop cluster belong here.
 
 global:
-  # Let's Encrypt can't validate g03.cpo2026.it against a laptop, so locally we sign the
-  # Ingress TLS cert with cert-manager's self-signed ClusterIssuer. The browser will warn
-  # "not trusted" — expected; the point is to exercise the same TLS plumbing as production.
+  # Browser-resolvable app host for kind: *.localhost auto-resolves to 127.0.0.1 (no /etc/hosts), and
+  # the realm client already allows https://<domain>/* + web origin, so the in-cluster SPA logs in with
+  # no extra realm edits. Prod keeps g03.cpo2026.it (base values).
+  domain: app.localhost
+  # Let's Encrypt can't validate the host against a laptop, so locally we sign the Ingress TLS cert with
+  # cert-manager's self-signed ClusterIssuer. The browser will warn "not trusted" — expected; the point
+  # is to exercise the same TLS plumbing as production.
   clusterIssuer: selfsigned
   # Local OIDC: tokens are issued for the kind ingress host (auth.localhost), but the services fetch
   # JWKS / mint service tokens over the in-cluster Service DNS (no ingress/TLS hairpin on a laptop).
@@ -76,3 +80,12 @@ services:
       repository: localhost:5001/eurotransit/users
       tag: dev
       pullPolicy: Always
+
+# Host the debug SPA in-cluster (served at https://app.localhost) so the whole app can be exercised
+# from the browser without running any service locally. Built + pushed by `just images-kind`.
+frontend:
+  enabled: true
+  image:
+    repository: localhost:5001/eurotransit/frontend
+    tag: dev
+    pullPolicy: Always

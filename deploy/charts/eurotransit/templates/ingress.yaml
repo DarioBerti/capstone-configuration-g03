@@ -50,3 +50,35 @@ spec:
                 name: users
                 port:
                   number: {{ .Values.services.users.port }}
+          {{- if .Values.frontend.enabled }}
+          {{- /*
+          DEV-ONLY (frontend.enabled): the in-cluster debug SPA calls Inventory and Payments directly,
+          so we expose them here too. In prod these stay internal (no public route) — never enable the
+          hosted debug SPA there. The "/" catch-all serves the SPA for everything that isn't /api/*
+          (Traefik prefers the longer /api/<svc> prefixes, so API calls still reach the services).
+          */}}
+          # /api/inventory/** -> Inventory (debug SPA reads seat availability)
+          - path: /api/inventory
+            pathType: Prefix
+            backend:
+              service:
+                name: inventory
+                port:
+                  number: {{ .Values.services.inventory.port }}
+          # /api/payments/** -> Payments (debug SPA reads the authorization outcome)
+          - path: /api/payments
+            pathType: Prefix
+            backend:
+              service:
+                name: payments
+                port:
+                  number: {{ .Values.services.payments.port }}
+          # everything else -> the static SPA (history-mode fallback handled by nginx)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: {{ .Values.frontend.port }}
+          {{- end }}

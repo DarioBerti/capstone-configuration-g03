@@ -23,6 +23,11 @@ metadata:
 spec:
   instances: {{ .Values.keycloak.instances }}
   image: {{ .Values.keycloak.image }}
+  # We pin the STOCK Keycloak image (not a pre-augmented one). Setting spec.image makes the operator
+  # assume the image is already optimized and skip the build, so --db=postgres (a build-time option)
+  # never gets applied and the server aborts (exit 2). startOptimized=false forces the operator to run
+  # `kc build` at startup so the DB vendor + health options take effect.
+  startOptimized: false
   db:
     vendor: postgres
     host: {{ .Values.keycloak.db.host }}

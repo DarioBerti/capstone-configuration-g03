@@ -32,7 +32,7 @@ Three secrets live in the `eurotransit` namespace:
 | Secret | Keys | Used by |
 |---|---|---|
 | `keycloak-db` | `username`, `password` | CNPG-managed `keycloak` role **and** the Keycloak CR's DB connection |
-| `keycloak-initial-admin` | `username`, `password` | Keycloak bootstrap admin (console login) |
+| `keycloak-bootstrap-admin` | `username`, `password` | Keycloak bootstrap admin (console login). Must **not** be named `keycloak-initial-admin` — the operator reserves `<cr-name>-initial-admin` for the secret it generates itself. |
 | `orders-oidc` | `client-secret` | Orders reads it (`ORDERS_CLIENT_SECRET`); must equal the realm's `orders-svc` client secret |
 
 - **Local kind**: rendered as plaintext by the chart when `keycloak.devSecrets=true` (set in
@@ -48,7 +48,7 @@ Three secrets live in the `eurotransit` namespace:
     --dry-run=client -o yaml | kubeseal --format yaml > keycloak-db-sealedsecret.yaml
 
   # bootstrap admin
-  kubectl create secret generic keycloak-initial-admin -n eurotransit \
+  kubectl create secret generic keycloak-bootstrap-admin -n eurotransit \
     --from-literal=username=admin --from-literal=password="$(openssl rand -base64 24)" \
     --dry-run=client -o yaml | kubeseal --format yaml > keycloak-admin-sealedsecret.yaml
 
