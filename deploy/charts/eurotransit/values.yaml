@@ -7,7 +7,7 @@ global:
   # image path prefix: full image = <registry>/<imagePrefix>/<service>
   imagePrefix: eurotransit
   # public host the Ingress serves (TLS cert is issued for this name)
-  domain: 158.158.71.17
+  domain: 158.158.71.17.sslip.io
   # Kafka bootstrap exposed by the Strimzi-managed cluster (platform namespace)
   kafkaBootstrap: eurotransit-kafka-bootstrap.kafka.svc:9092
 
