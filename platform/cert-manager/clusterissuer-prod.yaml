@@ -16,8 +16,9 @@ spec:
     # Let's Encrypt PRODUCTION endpoint. It is rate-limited; while testing, switch to staging:
     #   https://acme-staging-v02.api.letsencrypt.org/directory
     server: https://acme-v02.api.letsencrypt.org/directory
-    # TODO: set the team contact address — Let's Encrypt sends expiry/issue warnings here.
-    email: team-g03@example.com
+    # Let's Encrypt sends expiry/issue warnings here. Kept identical to clusterissuer.yaml's
+    # letsencrypt-prod so the two definitions can't diverge (apply only ONE — see agent-log #13).
+    email: dario.berti100@gmail.com
     # cert-manager stores the ACME account private key in this Secret.
     privateKeySecretRef:
       name: letsencrypt-prod-account-key

@@ -2,15 +2,18 @@
 
 Questo documento è la **mappa di avanzamento** condivisa: dice a che punto siamo, cosa è già fatto e verificato, e cosa resta — in ordine, così possiamo procedere senza perderci. Aggiornalo quando una fase cambia stato.
 
-> **DOVE SIAMO ORA (21/06/2026): Fase 0 e Fase 1 COMPLETE e verificate. Prossima: Fase 2 (resilienza applicativa).**
+> **DOVE SIAMO ORA (28/06/2026): Fase 0/1 ✅. Fase 2 (resilienza) implementata su `app/fase-2` e ri-applicata sul
+> layout layer-folder in `app/fase-3-consolidation` (compila; test Testcontainers da eseguire). Fase 3 IN CORSO:
+> chart/operatori/Argo pronti, MA bloccata finché la CI non builda le immagini in ACR (manca: merge consolidamento →
+> main, secret ACR, fix `global.domain` con l'IP Traefik live). Vedi `docs/FASE3_*` e agent-log #13.**
 
-Legenda stato: ✅ fatto · 🔜 prossima · ⬜ da fare
+Legenda stato: ✅ fatto · 🔄 in corso · 🔜 prossima · ⬜ da fare
 
 ```text
  Fase 0  Fondamenta            ✅
  Fase 1  Core money path       ✅   ← codice dei 5 servizi, tutti i test verdi
- Fase 2  Resilienza            🔜   ← SI RIPARTE DA QUI
- Fase 3  Piattaforma su cluster ⬜
+ Fase 2  Resilienza            ✅   ← CB/bulkhead/retry/429/void + test (da consolidare su main)
+ Fase 3  Piattaforma su cluster 🔄   ← SI RIPARTE DA QUI (Argo Synced&Healthy bloccato su immagini ACR)
  Fase 4  Observability         ⬜
  Fase 5  Progressive delivery  ⬜
  Fase 6  Chaos + postmortem    ⬜
