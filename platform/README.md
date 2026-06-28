@@ -15,6 +15,14 @@ then operate the EuroTransit application declared in `deploy/charts/eurotransit`
 | **Tempo / OTel collector** | `observability` | Distributed tracing backend for the money path | Lab05 |
 | **Chaos Mesh** | `chaos-mesh` | Controlled failure injection for the chaos experiments | Capstone |
 
+## Pinned operator versions (reproducibility)
+
+Operators are installed once via Helm with an **explicit** chart version (never `latest`).
+
+| Operator | Chart | Pinned version | Notes |
+|---|---|---|---|
+| **Strimzi** | `strimzi/strimzi-kafka-operator` | `1.0.0` | verified 2026-06-28; latest stable (≥0.50.1 fixes CVE-2026-27133/27134) |
+
 Subdirectories hold the per-component bootstrap config:
 
 ```

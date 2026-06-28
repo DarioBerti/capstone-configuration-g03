@@ -10,12 +10,14 @@
 > - **credito Azure residuo:** ~64€ → con il cluster acceso ~8€/giorno restano **~8 giorni h24**.
 >   `az aks stop` quando non lavori non è opzionale: è ciò che fa arrivare alla demo (vedi §1.4).
 >
-> Current node pool:
+> 
 > aks-etpool-20149210-vmss000000   Ready    <none>   72m     v1.33.12   Standard_B2s_v2
 
 > aks-etpool-20149210-vmss000001   Ready    <none>   3m4s    v1.33.12   Standard_B2s_v2
 
 > aks-etpool-20149210-vmss000002   Ready    <none>   2m43s   v1.33.12   Standard_B2s_v2
+
+> strimzi-cluster-operator-6bb56dd546-684rr   1/1     Running   0          113s
 
 
 ---
@@ -187,18 +189,6 @@ az aks start -g $RG -n $AKS     # RIPRENDI: ~3-5 min per tornare su (i dati rest
 ✅ **Fatto quando:** dopo `az aks stop` il portale Azure mostra i nodi *Stopped* e il credito compute
 smette di scendere.
 
-### 1.4 — Aggiungi i compagni come admin del cluster (D-A)
-
-Per ogni membro del gruppo (serve il loro `<object-id>` o email Azure AD):
-
-```bash
-# dà accesso admin al cluster (possono fare kubectl get-credentials e operarci)
-az role assignment create \
-  --assignee "<email-o-objectId-del-compagno>" \
-  --role "Azure Kubernetes Service Cluster Admin Role" \
-  --scope $(az aks show -g $RG -n $AKS --query id -o tsv)
-```
-
 Poi **ogni compagno** lancia `az aks get-credentials -g $RG -n $AKS` e ha il cluster.
 
 ✅ **Fatto quando:** un compagno riesce a fare `kubectl get nodes`.
@@ -241,12 +231,17 @@ kubectl get crd | Select-String "cnpg|kafka|cert-manager|sealed|traefik"
 
 ```bash
 helm repo add strimzi https://strimzi.io/charts && helm repo update
-helm upgrade --install strimzi strimzi/strimzi-kafka-operator -n kafka --create-namespace --version 0.45.0
+helm upgrade --install strimzi strimzi/strimzi-kafka-operator -n kafka --create-namespace --version 1.0.0
 kubectl get pods -n kafka
 ```
 
-> ⚠️ **PINNA LA VERSIONE** (qui `0.45.0`, non `latest`) e annotala in `platform/README.md` — riproducibilità
+> ⚠️ **PINNA LA VERSIONE** (qui `1.0.0`, non `latest`) e annotala in `platform/README.md` — riproducibilità
 > (igiene Lab04). Controlla l'ultima patch stabile prima di fissarla.
+>
+> 🔁 **Aggiornato (giu 2026):** installato l'operatore **1.0.0**. Attenzione: Strimzi 1.0.0 è *breaking* —
+> ha rimosso l'API `kafka.strimzi.io/v1beta2` (usa `v1`) e Kafka 3.9.0 (usa una 4.x, qui `4.1.2`). I manifest
+> in `platform/strimzi/` sono già adeguati. Se reinstalli con una versione diversa, riallinea apiVersion e
+> `spec.kafka.version` di conseguenza.
 
 ### Verifica finale §2
 
@@ -262,6 +257,13 @@ kubectl get crd | Select-String "kafka.strimzi.io"         # CRD Kafka ora prese
 
 ## §3 — CR di piattaforma: Kafka + TLS
 
+> 🎓 **Teoria — perché qui usi i CR e non comandi imperativi.** In §2 hai installato gli *operatori*:
+> programmi che girano nel cluster e sanno **come** costruire un pezzo di infrastruttura. In §3 dici loro
+> **cosa** vuoi, applicando dei *Custom Resource* (CR), cioè oggetti YAML di un tipo che l'operatore ha
+> aggiunto a Kubernetes (i CRD installati in §2). Tu descrivi lo *stato desiderato* (un cluster Kafka, un
+> certificato TLS), l'operatore lo *riconcilia* di continuo fino a realizzarlo. È il modello dichiarativo:
+> non scrivi i passi, scrivi il risultato.
+
 ### 3.1 — Kafka cluster + topic (Strimzi)
 
 I file sono **già scritti**, applicali così come sono:
@@ -272,6 +274,12 @@ kubectl apply -f platform/strimzi/kafka.yaml
 kubectl apply -f platform/strimzi/kafka-topics.yaml
 kubectl get kafka,kafkanodepool,kafkatopic -n kafka -w
 ```
+
+> 🎓 **Cosa fanno i comandi.** `kubectl apply -f` manda il file YAML all'API di Kubernetes come stato
+> desiderato; l'operatore Strimzi vede il nuovo CR `Kafka` e crea per te broker, storage e rete. `kafka.yaml`
+> definisce il *cluster* (con `KafkaNodePool` = i gruppi di nodi/broker), `kafka-topics.yaml` definisce i
+> *topic* (le code di messaggi su cui i microservizi si scambiano eventi in modo asincrono). `kubectl get ...
+> -w` resta in *watch* (`-w`) e ti mostra lo stato evolvere in tempo reale invece di una sola foto.
 
 > 🔁 Il bootstrap interno `eurotransit-kafka-bootstrap.kafka.svc:9092` combacia già con
 > `values.yaml` (`global.kafkaBootstrap`) → i servizi `usesKafka` lo ricevono via env. **Nessuna modifica.**
@@ -284,6 +292,14 @@ Il cluster Kafka ci mette qualche minuto a diventare Ready (deve formare il quor
 Qui c'è il lavoro "vero" della Fase 3 che il piano teorico dà per scontato. **Due cose mancano e le devi
 creare tu:**
 
+> 🎓 **Teoria — cos'è il TLS qui e chi sono gli attori.** Vuoi che il traffico verso l'app viaggi su HTTPS
+> con un certificato *fidato dai browser*. Servono tre cose: (1) un *hostname* pubblico che punti al cluster
+> (lo risolvi con `sslip.io`, un DNS che traduce `1.2.3.4.sslip.io` → `1.2.3.4` senza comprare un dominio);
+> (2) **cert-manager**, l'operatore che chiede e rinnova i certificati; (3) un **ClusterIssuer**, l'oggetto
+> che dice a cert-manager *da quale autorità* (qui Let's Encrypt) e *con quale metodo* (ACME HTTP-01)
+> ottenere i certificati. HTTP-01 prova che possiedi l'host facendo rispondere il tuo Ingress (Traefik) a una
+> challenge: per questo l'hostname deve risolvere davvero all'IP di Traefik.
+
 **(a) Aggiornare il dominio in `values.yaml`** — ora `global.domain: g03.cpo2026.it` è un **placeholder
 finto**. Usa l'IP di Traefik (§2.2) con `sslip.io` (D-E: niente DNS da comprare):
 
@@ -291,6 +307,10 @@ finto**. Usa l'IP di Traefik (§2.2) con `sslip.io` (D-E: niente DNS da comprare
 TRAEFIK_IP=$(kubectl get svc -n traefik traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 echo "Il tuo host sarà: ${TRAEFIK_IP}.sslip.io"
 ```
+
+> 🎓 **Cosa fa il comando.** Legge il `Service` di Traefik e con `-o jsonpath=...` estrae **solo** l'IP
+> pubblico che il load balancer di Azure gli ha assegnato (invece di stampare tutto l'oggetto). Quell'IP +
+> `.sslip.io` diventa l'hostname che userai ovunque.
 
 Poi modifica **una riga** in `deploy/charts/eurotransit/values.yaml`:
 
@@ -349,6 +369,13 @@ spec:
             ingressClassName: traefik
 ```
 
+> 🎓 **Teoria — staging vs prod e il flusso ACME.** Un `ClusterIssuer` è *cluster-wide* (vale in tutti i
+> namespace, a differenza di un `Issuer`). Ne definisci due perché Let's Encrypt **prod** emette certificati
+> veri ma ha un *rate limit* severo: prima provi su **staging** (certificati non fidati ma limiti larghi) per
+> verificare che la catena funzioni, poi passi a prod. `privateKeySecretRef` è la chiave del tuo *account*
+> ACME (cert-manager la crea da sé); `solvers.http01.ingress` dice di risolvere la challenge tramite l'Ingress
+> Traefik.
+
 Applicalo a mano (è piattaforma, non app → `kubectl apply` è legittimo qui):
 
 ```bash
@@ -356,6 +383,11 @@ kubectl apply -f platform/cert-manager/clusterissuer.yaml
 kubectl get clusterissuer    # entrambi devono diventare Ready=True
 git add platform/cert-manager/clusterissuer.yaml && git commit -m "fase3: ClusterIssuer Let's Encrypt staging+prod" && git push
 ```
+
+> 🎓 **Cosa fanno i comandi.** `kubectl apply` registra i due issuer; `Ready=True` significa che cert-manager
+> ha contattato Let's Encrypt e l'account ACME è valido. Il `git add/commit/push` non serve a Kubernetes ora
+> (lo hai già applicato a mano), ma mette il file **in Git**: è la fonte di verità da cui Argo CD (§5) e i
+> colleghi ripartiranno — la piattaforma deve essere riproducibile, non vivere solo sul tuo disco.
 
 > ⚠️ **Strategia anti rate-limit:** Let's Encrypt **prod** ha un limite duro (5 cert/settimana per dominio).
 > Per il primo giro **testa con staging**: temporaneamente cambia in `templates/ingress.yaml` l'annotation in
@@ -371,6 +403,14 @@ git add platform/cert-manager/clusterissuer.yaml && git commit -m "fase3: Cluste
 ## §4 — Secrets: (spoiler) probabilmente NON devi sigillare niente
 
 Questo è il §4 più corto che ci sia, ed è **voluto** (è una proprietà di design, scrivilo nei docs).
+
+> 🎓 **Teoria — il problema dei segreti in GitOps.** In GitOps *tutto* sta in Git, ma un `Secret` Kubernetes
+> è codificato in base64, **non cifrato**: committarlo in chiaro è una falla. Le soluzioni: (a) un
+> **SealedSecret** = un Secret *cifrato* con la chiave pubblica del controller, sicuro da mettere in Git
+> perché solo il controller in-cluster può decifrarlo; (b) far **generare** il segreto direttamente
+> nel cluster da chi lo possiede, così non passa mai da Git. Qui vince (b): CNPG crea le password DB,
+> la managed identity gestisce il pull ACR → non resta nessun segreto da committare. `secretKeyRef` è il
+> meccanismo con cui il Deployment legge un valore da un Secret e lo inietta come variabile d'ambiente.
 
 - **Credenziali DB:** **zero segreti in Git.** L'operatore CNPG genera da solo il Secret `<db>-app`
   in-cluster (es. `orders-db-app`); il Deployment lo legge via `secretKeyRef`. Già cablato nel chart.
@@ -389,6 +429,14 @@ Questo è il §4 più corto che ci sia, ed è **voluto** (è una proprietà di d
 
 ## §5 — Il cuore della Fase 3: Argo CD → app **Synced & Healthy**
 
+> 🎓 **Teoria — cos'è GitOps e cosa fa Argo CD.** GitOps significa: lo stato desiderato del cluster vive in
+> un repo Git, e un agente lo applica al posto tuo. **Argo CD** è quell'agente. Gli dai un oggetto
+> `Application` che dice "guarda *questo* repo/path (il chart Helm `eurotransit`) e fai sì che il cluster gli
+> assomigli". Argo confronta di continuo *desiderato* (Git) vs *reale* (cluster) e riporta due stati:
+> **Synced** (il cluster coincide con Git) e **Healthy** (le risorse girano davvero). Con `selfHeal` annulla
+> le modifiche fatte a mano (drift) e con `prune` cancella ciò che togli da Git. Per questo la regola d'oro è
+> "mai `helm install` a mano sull'app": Git è l'**unica** fonte di verità.
+
 ### 5.1 — Accedi alla UI di Argo CD (utile per vedere lo stato)
 
 ```bash
@@ -398,6 +446,11 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 kubectl port-forward -n argocd svc/argocd-server 8080:443
 # → vai su https://localhost:8080  (user: admin, password: quella sopra)
 ```
+
+> 🎓 **Cosa fanno i comandi.** Il primo legge il Secret con la password generata da Argo all'installazione e
+> la decodifica (`base64 -d`, perché i Secret sono salvati in base64). `kubectl port-forward` apre un tunnel
+> dalla tua porta locale `8080` alla porta `443` del Service di Argo dentro il cluster: ti fa raggiungere la
+> UI **senza** esporla pubblicamente.
 
 (Opzionale: installa la CLI `argocd` per i comandi `argocd app get`.)
 
@@ -422,6 +475,10 @@ kubectl apply -f platform/argocd/eurotransit-application.yaml
 kubectl get applications -n argocd
 ```
 
+> 🎓 **Cosa fa il comando.** Crei l'oggetto `Application`: da questo momento Argo CD "adotta" il chart e
+> inizia a sincronizzarlo. `kubectl get applications` ti mostra la riga `eurotransit` con le colonne
+> `SYNC STATUS` e `HEALTH STATUS` — gli stessi due indicatori della UI, da terminale.
+
 > 🔁 Verifica che `repoURL` nel file sia l'URL **giusto** del vostro config-repo. Ho controllato il git
 > remote: è `https://github.com/DarioBerti/capstone-configuration-g03.git` → **combacia, non modificare**.
 
@@ -445,6 +502,11 @@ kubectl get pods -n eurotransit -w
 
 Devi **dimostrare** che Git è l'unica verità. Fai una modifica "fuori banda" e guarda Argo annullarla:
 
+> 🎓 **Teoria — drift e reconcile.** *Drift* = divergenza tra lo stato reale e quello descritto in Git
+> (qualcuno ha toccato il cluster a mano). *Reconcile* = il ciclo con cui Argo rileva la divergenza e
+> riallinea. Qui la provochi apposta per dimostrare che `selfHeal` annulla le modifiche manuali e `prune`
+> ricrea ciò che cancelli: è la prova che il sistema è auto-correttivo.
+
 ```bash
 # 1) drift: scala a mano un deployment
 kubectl scale deploy/catalog -n eurotransit --replicas=5
@@ -456,6 +518,11 @@ kubectl delete deploy/catalog -n eurotransit
 #    -> Argo la ricrea. SCREENSHOTTA.
 ```
 
+> 🎓 **Cosa fanno i comandi.** `kubectl scale` cambia a mano il numero di repliche (5 invece delle 2 in Git):
+> stai *mentendo* al cluster di proposito. `kubectl delete` rimuove del tutto il Deployment. In entrambi i
+> casi Argo, vedendo che il reale non coincide più con Git, ripristina lo stato corretto da solo — ed è
+> esattamente ciò che la traccia vuole vedere catturato.
+
 > 📸 **Salva screenshot/log del self-heal** — servono per la demo (Fase 6) e per la riga nei docs.
 > Questo è letteralmente un punto della Definition of Done.
 
@@ -465,6 +532,13 @@ cancellata.
 ---
 
 ## §6 — Le 4 verifiche che la traccia vuole PROVATE (non dichiarate)
+
+> 🎓 **Teoria — perché proprio queste 4 prove.** La traccia distingue tra *dichiarare* una proprietà e
+> *dimostrarla* con un comando ripetibile. Le quattro toccano i punti critici: **replica sincrona CNPG** →
+> garantisce **RPO=0** (Recovery Point Objective: zero dati persi, perché una scrittura è confermata solo
+> quando è anche sulla replica) sull'invariante "niente oversell" di inventory; **Secret iniettati** →
+> conferma che i pod girano col profilo Postgres vero e non con un DB H2 di fallback; **health del
+> money-path** → prova che la catena di eventi attraversa davvero i servizi fino allo stato CONFIRMED.
 
 ```bash
 # 6.1 — Replica sincrona CNPG (RPO=0 sull'invariante inventory)
@@ -477,17 +551,32 @@ kubectl cnpg status inventory-db -n eurotransit    # serve il plugin kubectl-cnp
 > `curl -sSfL https://github.com/cloudnative-pg/cloudnative-pg/raw/main/hack/install-cnpg-plugin.sh | sudo sh`.
 > In alternativa leggi lo status grezzo: `kubectl get cluster inventory-db -n eurotransit -o yaml | grep -A5 synchronous`.
 
+> 🎓 **Cosa fanno i comandi (6.1).** `kubectl get cluster` elenca i `Cluster` CNPG e quante istanze ha
+> ciascuno (inventory-db a 3, orders-db a 2). `kubectl cnpg status` è un sotto-comando del plugin CNPG che
+> mostra ruolo dei pod (primario/replica) e se la replica è **sincrona** (il primario aspetta la conferma
+> della replica prima di confermare il commit = nessuna perdita su failover).
+
 ```bash
 # 6.2 — Secret <db>-app iniettati nei pod (profilo postgres, non H2)
 kubectl exec -n eurotransit deploy/orders -- printenv | grep -E 'DB_HOST|DB_NAME|DB_USER'
 #   -> devono essere popolate dai Secret CNPG (orders-db-app)
 ```
 
+> 🎓 **Cosa fa il comando (6.2).** `kubectl exec ... -- printenv` esegue `printenv` **dentro** il container
+> del pod orders e ne stampa le variabili d'ambiente; `grep` filtra quelle del DB. Se sono valorizzate,
+> significa che il `secretKeyRef` ha pescato davvero i valori dal Secret `orders-db-app` generato da CNPG.
+
 ```bash
 # 6.3 — Health del money-path end-to-end (via Traefik)
 curl -k https://<TRAEFIK_IP>.sslip.io/api/catalog/products      # legge il catalogo in TLS
 # un POST /api/orders reale attraversa Orders -> outbox -> Kafka -> Inventory/Payments -> CONFIRMED
 ```
+
+> 🎓 **Cosa fa il comando (6.3).** `curl` fa una richiesta HTTP dall'esterno attraverso Traefik (l'Ingress),
+> esercitando tutta la catena: TLS → routing → servizio. Il flag `-k` accetta certificati non fidati: utile
+> mentre sei su Let's Encrypt **staging** (§3.2); con il cert prod puoi toglierlo. Il `POST /api/orders`
+> mostra il *money-path* asincrono: orders scrive nell'outbox, l'evento passa per Kafka, inventory e payments
+> reagiscono, l'ordine arriva a CONFIRMED.
 > Se 2.6/2.7 non sono ancora mergiati il path **funziona comunque**: mancano solo metriche/anti-storm extra.
 
 **6.4** — Con il cluster su, il team Fase 2 può validare *live* probe/PDB/HPA/topology/graceful-degradation
@@ -506,6 +595,14 @@ curl -k https://<TRAEFIK_IP>.sslip.io/api/catalog/products      # legge il catal
 
 Questo **non tocca il cluster**: si fa mentre un altro provisiona AKS. Chiude l'anello GitOps:
 `git push` sull'app-repo → immagini in ACR → bump tag nel config-repo → Argo CD riconcilia.
+
+> 🎓 **Teoria — come si chiude l'anello e perché la CI è "cieca" sul cluster.** L'idea GitOps è separare
+> *chi costruisce* da *chi rilascia*. La **CI** (GitHub Actions) builda l'immagine, la pubblica nell'ACR e
+> poi *modifica il tag dell'immagine* nel config-repo (un commit). Da lì in poi **non fa nient'altro**: è
+> **Argo CD**, dentro il cluster, a notare il nuovo tag in Git e a fare il rollout. Vantaggio di sicurezza:
+> la CI non possiede mai le credenziali del cluster (*least privilege*) — il suo unico potere è un PAT che
+> scrive **solo** sul config-repo. Se la CI venisse compromessa, non potrebbe toccare la produzione
+> direttamente. Questo è un vincolo che la valutazione controlla esplicitamente.
 
 La CI (`capstone-application-g03/.github/workflows/ci.yml`) è **già scritta**, mai eseguita. Serve solo
 configurare 4 cose nelle **Settings del repo `capstone-application-g03`**:
@@ -532,6 +629,11 @@ configurare 4 cose nelle **Settings del repo `capstone-application-g03`**:
 # dall'app-repo: un push su main (o "Run workflow" da Actions = workflow_dispatch)
 git -C capstone-application-g03 commit --allow-empty -m "ci: test pipeline fase3" && git push
 ```
+
+> 🎓 **Cosa fa il comando.** `git -C <dir>` esegue git in quella cartella senza doverci entrare. `commit
+> --allow-empty` crea un commit *senza modifiche* di codice: serve solo a generare un evento `push` che
+> *innesca* la pipeline, così la testi end-to-end senza cambiare nulla nell'app. In alternativa, "Run
+> workflow" dalla tab Actions usa il trigger `workflow_dispatch` (avvio manuale) per lo stesso scopo.
 
 ✅ **Fatto quando:** i 3 job (detect → build → update-gitops) sono **verdi**, compare un commit
 `ci: bump image tags ...` sul **config-repo**, e Argo CD fa il rollout della nuova immagine.

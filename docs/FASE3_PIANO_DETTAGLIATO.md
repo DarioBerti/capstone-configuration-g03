@@ -35,3 +35,10 @@ Le scelte non ovvie del piano. Le sette **D-A..D-G** sono confermate; **D9** è 
 ---
 
 Continue in FASE3_GUIDA_PRATICA.md ...
+
+**Colleagues have to do**:
+- az login
+- if they have more than one subscription, pick the right one:
+- az account set --subscription "Azure for Students"   # the 7c9b016c... one
+- az aks get-credentials -g lab02_g03_group -n lab_g03_cluster
+- kubectl get nodes
