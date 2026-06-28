@@ -20,7 +20,7 @@ Le scelte non ovvie del piano. Le sette **D-A..D-G** sono confermate; **D9** è 
 |---|---|---|---|---|
 | **D-A** | ✅ **Un solo cluster AKS condiviso** dal gruppo, con **ogni membro aggiunto come collaboratore con privilegi admin** | Uno per persona | Il budget (~200€/persona) si brucerebbe in parallelo inutilmente; un cluster solo = più credito per tenerlo su nei giorni di lavoro/demo, e tutti possono operarci | §1 |
 | **D-B** | ✅ **`az aks stop` quando non si lavora** (spegnere i nodi, non distruggere) | Lasciarlo acceso / distruggerlo ogni volta | È **la** decisione che fa stare il progetto nei 200€. Acceso h24 brucia ~8€/giorno; spento paghi solo i dischi (centesimi) | §1.4, Appendice A |
-| **D-C** | ✅ **2 nodi `Standard_B4ms`** (4 vCPU/16 GB) per il lavoro quotidiano; **scalare a 3 SOLO per i chaos experiment (Fase 6) e la demo finale** | Nodi più grossi D-series / 1 nodo / 3 fissi | I requests stimati stanno in ~3.3 vCPU/9 GiB: 2 nodi bastano e costano meno; il 3° serve solo quando topology spread + PDB + chaos node-kill devono essere *dimostrati*. B-series è la più economica | §1.3 |
+| **D-C** | ✅ **3 nodi `Standard_B2s_v2`** (2 vCPU/8 GiB ciascuno = **6 vCPU / 24 GiB** totali), pool `etpool` | 2× `B4ms`/`B4s_v2` (piano originale) · D-series · 1 nodo | **Vincolo quota reale (giu 2026): solo 6 vCPU regionali in `spaincentral` e `B4ms` non disponibile** → 2× B4s_v2 (8 vCPU) sfora. 3× B2s_v2 sta esatto nei 6 vCPU, copre i requests (~3.3 vCPU/~9 GiB) con margine sulla RAM, e 3 nodi sono pure meglio per topology spread / PDB. ⚠️ NON usare B2ls_v2/B2as_v2 (4 GiB, troppo poca RAM). Caveat Fase 6: con 6 vCPU tutti occupati un chaos node-kill lascia 4 vCPU → alcuni pod `Pending` (finding da documentare) | §1.3 (cfr. GUIDA PRATICA §1.1) |
 | **D-D** | ✅ **Opzione A: piattaforma installata a mano con `helm`/`kubectl`; SOLO l'app `eurotransit` passa da Argo CD** | App-of-apps (anche la piattaforma in GitOps) | La traccia chiede *l'app* Synced & Healthy. App-of-apps è over-engineering per ora; gli operatori sono "install once" come dice `platform/README.md` | §2, §5 |
 | **D-E** | ✅ **TLS con hostname "IP-based" gratuito (`sslip.io`/`nip.io`) + Let's Encrypt**, non un dominio comprato | Comprare `g03.cpo2026.it` (placeholder nel chart) | Evita spesa e gestione DNS; HTTP-01 di Let's Encrypt funziona contro l'IP pubblico di Traefik. `g03.cpo2026.it` nel chart è **finto** | §3.2 |
 | **D-F** | ✅ **Pull da ACR via managed identity** (`az aks update --attach-acr`), niente `imagePullSecret` | imagePullSecret sealed in Git | Più pulito e meno segreti in giro; è il modo "Azure-native". Nessuna modifica al chart richiesta | §1.2, §4 |
@@ -40,5 +40,5 @@ Continue in FASE3_GUIDA_PRATICA.md ...
 - az login
 - if they have more than one subscription, pick the right one:
 - az account set --subscription "Azure for Students"   # the 7c9b016c... one
-- az aks get-credentials -g lab02_g03_group -n lab_g03_cluster
+- az aks get-credentials -g lab02_g03_group -n lab_g03_cluster --admin
 - kubectl get nodes
