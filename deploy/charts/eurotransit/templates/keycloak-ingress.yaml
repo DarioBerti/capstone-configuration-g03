@@ -1,0 +1,33 @@
+{{- /*
+North-south route for the Keycloak login UI on its own subdomain (auth.<domain>). cert-manager issues a
+dedicated TLS cert; Traefik terminates it and forwards plain HTTP to the operator-managed Service
+("<keycloak-name>-service" on port 8080, created because http.httpEnabled=true on the Keycloak CR).
+*/ -}}
+{{- if .Values.keycloak.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keycloak
+  labels:
+    app.kubernetes.io/part-of: eurotransit
+    app.kubernetes.io/name: keycloak
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.global.clusterIssuer }}
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - {{ .Values.keycloak.hostname }}
+      secretName: keycloak-tls
+  rules:
+    - host: {{ .Values.keycloak.hostname }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak-service
+                port:
+                  number: 8080
+{{- end }}

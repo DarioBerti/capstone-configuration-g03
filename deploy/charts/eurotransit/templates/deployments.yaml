@@ -67,6 +67,25 @@ spec:
             - name: {{ $envName }}
               value: {{ $envValue | quote }}
             {{- end }}
+            {{- if $svc.secured }}
+            {{- /* OAuth2 resource server: validate Keycloak JWTs. jwk-set-uri is lazy (no startup coupling); issuer is the claim check. */}}
+            - name: KEYCLOAK_JWK_SET_URI
+              value: {{ $.Values.global.oidc.jwkSetUri | quote }}
+            - name: KEYCLOAK_ISSUER
+              value: {{ $.Values.global.oidc.issuer | quote }}
+            {{- end }}
+            {{- if $svc.oidcClient }}
+            {{- /* Client-credentials registration so this service can mint a SERVICE token for outbound calls (e.g. Orders -> Inventory/Payments off the Kafka thread). Secret is a SealedSecret in prod. */}}
+            - name: KEYCLOAK_TOKEN_URI
+              value: {{ $.Values.global.oidc.tokenUri | quote }}
+            - name: ORDERS_CLIENT_ID
+              value: {{ $svc.oidcClient.clientId | quote }}
+            - name: ORDERS_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $svc.oidcClient.secretName }}
+                  key: client-secret
+            {{- end }}
             {{- if $svc.db }}
             # switch the app onto PostgreSQL (the postgres Spring profile)
             - name: SPRING_PROFILES_ACTIVE
