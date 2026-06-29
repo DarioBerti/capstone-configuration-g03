@@ -1,5 +1,16 @@
 # Fase 3 — Guida pratica "cosa fare davvero"
 
+> ✅ **STATO FINALE (2026-06-28): FASE 3 COMPLETATA e verificata sul cluster reale `lab_g03_cluster`.**
+> Esito + evidenze in `docs/traccia/FASI_PROGETTO.md`. Tutta la DoD §8 è verde: operatori (Strimzi 1.0.0 /
+> Kafka 4.1.2 Ready / 7 topic, CNPG 1.29.1, cert-manager, Traefik, Sealed Secrets, Argo CD), CI verde
+> (`3af035e` in `labg03clusterregistry` + bump su config main), Argo **Synced & Healthy** + drift selfHeal/prune,
+> replica **sincrona** CNPG (`sync_state=quorum`, RPO=0) + secret `<db>-app` iniettati, TLS Let's Encrypt **prod**,
+> money-path **CONFIRMED**, **never-oversell** (1 CONFIRMED / 2 REJECTED `SOLD_OUT`, `available=0`).
+> **Deviazioni annotate:** registry CI riallineato `etg03registry`→`labg03clusterregistry` (agent-log #14);
+> ClusterIssuer dedup (un solo `clusterissuer.yaml`); cert emesso direttamente su `letsencrypt-prod` (staging non
+> necessario, catena ACME ok). Le sezioni sotto restano come **runbook di ri-bootstrap** (dopo ogni `az aks start`
+> ri-conferma l'IP Traefik vs `values.yaml:10`).
+
 > ℹ️ **INFORMAZIONI CLUSTER (già esistenti — NON ricreare):**
 > - **resource group:** `lab02_g03_group`
 > - **cluster AKS:** `lab_g03_cluster`

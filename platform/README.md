@@ -22,16 +22,20 @@ Operators are installed once via Helm with an **explicit** chart version (never 
 | Operator | Chart | Pinned version | Notes |
 |---|---|---|---|
 | **Strimzi** | `strimzi/strimzi-kafka-operator` | `1.0.0` | verified 2026-06-28; latest stable (≥0.50.1 fixes CVE-2026-27133/27134) |
+| **CloudNativePG** | `cnpg/cloudnative-pg` | `1.29.1` | ≥1.25 required for `postgresql.synchronous` (inventory/orders RPO=0); pin with `--version 1.29.1` |
 
 Subdirectories hold the per-component bootstrap config:
 
 ```
 argocd/          Argo CD Application(s) + Argo CD's own ingress/values + sealed repo creds
-strimzi/         Kafka cluster CR + KafkaTopic CRs (order-placed, inventory-reserved, ...)
+strimzi/         Kafka cluster CR + KafkaTopic CRs (order-placed, inventory-reserved, ...); kafka-kind.yaml = single-node kind variant
+cert-manager/    ClusterIssuers: clusterissuer.yaml (LE staging+prod, AKS) + clusterissuer-kind.yaml (selfsigned, kind)
+traefik/         Traefik install values: values.yaml (base) + values-prod.yaml (LoadBalancer, AKS) + values-kind.yaml (hostPort, kind)
 cloudnativepg/   operator install notes (the per-service Cluster CRs live in the app chart)
 observability/   kube-prometheus-stack values, Tempo/OTel, ServiceMonitors, SLO rules
 chaos-mesh/      chaos experiment manifests (one per hypothesis)
 sealed-secrets/  controller notes + how to seal a secret
+kind-registry/   local dev only: localhost:5001 registry that mirrors ACR for the kind fidelity loop
 ```
 
 > Secrets live in Git **only** as SealedSecrets (Lab04). CI updates desired state; Argo CD

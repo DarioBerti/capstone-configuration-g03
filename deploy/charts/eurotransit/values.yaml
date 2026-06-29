@@ -7,7 +7,7 @@ global:
   # image path prefix: full image = <registry>/<imagePrefix>/<service>
   imagePrefix: eurotransit
   # public host the Ingress serves (TLS cert is issued for this name)
-  domain: g03.cpo2026.it
+  domain: 158.158.71.17.sslip.io
   # cert-manager ClusterIssuer that signs the Ingress TLS cert (Secret eurotransit-tls).
   # Default = real Let's Encrypt (Argo CD / prod render base values.yaml only).
   # Local kind overrides this to "selfsigned" in values-kind.yaml (LE can't validate a laptop).
@@ -86,7 +86,7 @@ services:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
       repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
-      tag: latest
+      tag: 22ce722
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
     # baseline replica count (also the HPA floor / PDB reference)
@@ -107,11 +107,10 @@ services:
       minReplicas: 2
       maxReplicas: 4
       targetCPUUtilizationPercentage: 70
-
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: latest
+      tag: 22ce722
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -136,11 +135,10 @@ services:
       minReplicas: 2
       maxReplicas: 4
       targetCPUUtilizationPercentage: 70
-
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: latest
+      tag: 22ce722
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -151,11 +149,10 @@ services:
     # Deliberately NO HPA: the bottleneck is the single contended row in PostgreSQL, not service CPU -> more replicas would not increase reservation throughput
     hpa:
       enabled: false
-
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: latest
+      tag: 22ce722
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -166,11 +163,10 @@ services:
     # Deliberately NO HPA: work is I/O-bound on the (mock) PSP + idempotency store
     hpa:
       enabled: false
-
   notifications:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/notifications
-      tag: latest
+      tag: 22ce722
       pullPolicy: IfNotPresent
     # single replica: this service is allowed to be fully down (graceful degradation)
     replicaCount: 1
@@ -221,10 +217,7 @@ services:
 #   - catalog-db: single instance; staleness-tolerant by definition
 #
 # NOTE: `postgresql.synchronous` requires CloudNativePG >= 1.25
-
-
 databases:
-
   catalog-db:
     # single instance: a read store that tolerates staleness needs no HA
     instances: 1
@@ -251,7 +244,6 @@ databases:
       method: any
       number: 1
       dataDurability: preferred
-
   inventory-db:
     # 3 instances: survive losing ONE replica without blocking writes (the invariant store)
     instances: 3
@@ -262,7 +254,6 @@ databases:
       method: any
       number: 1
       dataDurability: required
-  
   payments-db:
     # single instance: correctness is the idempotency table, not replication (team decision)
     instances: 1
@@ -284,7 +275,6 @@ resources:
   # hard ceiling (memory only -> a CPU limit would throttle latency-sensitive spikes)
   limits:
     memory: 512Mi
-
 # Resources for every PostgreSQL instance (applied to all Cluster CRs)
 databaseResources:
   requests:

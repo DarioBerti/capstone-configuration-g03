@@ -2,15 +2,25 @@
 
 Questo documento è la **mappa di avanzamento** condivisa: dice a che punto siamo, cosa è già fatto e verificato, e cosa resta — in ordine, così possiamo procedere senza perderci. Aggiornalo quando una fase cambia stato.
 
-> **DOVE SIAMO ORA (21/06/2026): Fase 0 e Fase 1 COMPLETE e verificate. Prossima: Fase 2 (resilienza applicativa).**
+> **DOVE SIAMO ORA (28/06/2026): Fase 0/1 ✅. Fase 2 (resilienza) consolidata su `app/main` (test Testcontainers
+> da rieseguire localmente). Fase 3 ✅ VERIFICATA sul cluster reale `lab_g03_cluster`: registry CI riallineato a
+> `labg03clusterregistry` (era `etg03registry`, vedi agent-log #14), CI verde (tag `3af035e` in ACR + bump su config
+> main), Argo CD **Synced & Healthy**, drift selfHeal+prune dimostrati, replica **sincrona** CNPG (inventory/orders
+> `sync_state=quorum`, RPO=0), secret `<db>-app` iniettati, TLS Let's Encrypt **prod** su `158.158.71.17.sslip.io`,
+> money-path `POST /api/orders` → **CONFIRMED**.
+> **Fase 2 §6+§7 CHIUSI (28/06/2026):** §6 validato **live** sul cluster (6.1 probe readiness=db+readinessState senza kafka; 6.2 PDB
+> regge un `drain` con money-path mai a 0 + failover CNPG pulito; 6.4 HPA solo catalog/orders; 6.5 graceful shutdown = 45/45 `202`
+> + log `cooperative shutdown`; 6.6 notifications=0 → checkout CONFIRMED). §7-codice fatto (structured logging ECS + coerenza
+> metriche + guard low-cardinality). **Finding §6.3:** topology spread soft (`ScheduleAnyway`) → payments co-locate su un nodo
+> (rivedere `DoNotSchedule`). §7.2 dashboard / §7.4 alert = Fase 4. Cluster **fermato** (`az aks stop`) a fine validazione.**
 
-Legenda stato: ✅ fatto · 🔜 prossima · ⬜ da fare
+Legenda stato: ✅ fatto · 🔄 in corso · 🔜 prossima · ⬜ da fare
 
 ```text
  Fase 0  Fondamenta            ✅
  Fase 1  Core money path       ✅   ← codice dei 5 servizi, tutti i test verdi
- Fase 2  Resilienza            🔜   ← SI RIPARTE DA QUI
- Fase 3  Piattaforma su cluster ⬜
+ Fase 2  Resilienza            ✅   ← CB/bulkhead/retry/429/void + test; §6 validato LIVE + §7-codice (28/06/2026)
+ Fase 3  Piattaforma su cluster ✅   ← verificata sul cluster reale (2026-06-28): Argo Synced&Healthy, sync CNPG, money-path CONFIRMED
  Fase 4  Observability         ⬜
  Fase 5  Progressive delivery  ⬜
  Fase 6  Chaos + postmortem    ⬜
@@ -59,14 +69,15 @@ Rendere il sistema capace di **contenere** il guasto, non propagarlo (Pilastro C
 - ⬜ Compensazione **refund/void** su Payments per il caso `RESERVATION_EXPIRED` (oggi è un TODO in `OrderSaga`).
 - ℹ️ Probe / PDB / HPA / topology spread a livello K8s sono **già scritti** nel chart (Fase 0/1); qui si valida che funzionino col codice.
 
-## Fase 3 — Piattaforma sul cluster reale ⬜
+## Fase 3 — Piattaforma sul cluster reale ✅ (verificata 2026-06-28)
 
-Far girare davvero il sistema (finora tutto è locale + chart validata con `helm template`).
+Il sistema gira davvero su `lab_g03_cluster` (AKS, 3× B2s_v2), riconciliato da Argo CD.
 
-- ⬜ Installare i componenti di piattaforma (Traefik, cert-manager, **CloudNativePG ≥ 1.25**, **Strimzi**, Sealed Secrets, Argo CD).
-- ⬜ Collegare la CI ai repo GitHub veri (secret ACR + PAT del config repo).
-- ⬜ Far raggiungere ad Argo CD lo stato **Synced & Healthy**; provare drift + reconcile.
-- ⬜ Verificare la **replica sincrona** CNPG e i secret `<db>-app` iniettati nei pod.
+- ✅ Componenti di piattaforma: Traefik, cert-manager, **CloudNativePG 1.29.1**, **Strimzi 1.0.0** (Kafka 4.1.2 Ready, 7 topic), Sealed Secrets, Argo CD — tutti Running.
+- ✅ CI collegata ai repo veri (secret `ACR_USERNAME/PASSWORD` + `CONFIG_REPO_PAT` + var `GITOPS_REPO`): pipeline verde, immagini `3af035e` in `labg03clusterregistry`, bump tag su config main. ⚠️ Fix registry: CI puntava a `etg03registry` inesistente → riallineato (agent-log #14).
+- ✅ Argo CD **Synced & Healthy**; drift dimostrato: selfHeal (scale `inventory`→5 ritorna a 2) + prune (`delete notifications` ricreato).
+- ✅ Replica **sincrona** CNPG: `inventory-db` (3 ist., `dataDurability=required`) e `orders-db` (2 ist., `preferred`) con standby `streaming sync_state=quorum`, `ANY 1 (...)` → RPO=0. Secret `<db>-app` iniettati (pod `orders`: `DB_HOST=orders-db-rw`, ecc.).
+- ✅ Extra provati: TLS Let's Encrypt **prod** (`158.158.71.17.sslip.io`, HTTP 200 senza `-k`), money-path `POST /api/orders` → `PENDING→RESERVED→CONFIRMED`.
 
 ## Fase 4 — Observability ⬜
 

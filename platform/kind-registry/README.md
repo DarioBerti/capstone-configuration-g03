@@ -15,6 +15,6 @@ How the pieces fit:
   `localhost:5001/eurotransit/<svc>:dev`.
 - `deploy/charts/eurotransit/values-kind.yaml` — points each service image at that registry.
 
-The real cluster instead pulls from `lab02g03registry.azurecr.io` (base `values.yaml`) — unchanged.
+The real cluster instead pulls from `labg03clusterregistry.azurecr.io` (base `values.yaml`) — unchanged.
 
 Recreate everything from scratch with: `just cluster-down && just bootstrap-kind`.

@@ -254,6 +254,97 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   traceability doc (`docs/chaos/test-traceability.md`) + `@Tag("chaos-NN")` mapping each functional test to its
   anticipated cluster experiment.
 
+## 13. Phase 3 — the two consolidation PRs (kind-cluster → config/main, backend-fixes → app/main) shipped four regressions
+
+- **Produced (2026-06-28):** PR#1 on each repo merged parallel branches without reconciling against the in-flight
+  Phase-3 work. The merges introduced four concrete defects, none caught by the (green-but-trivial) CI:
+  1. **`global.domain` regression.** The kind-cluster branch carried the old placeholder `g03.cpo2026.it`; the merge
+     resolved the chart's `deploy/charts/eurotransit/values.yaml` in its favour, **silently reverting** the working
+     `158.158.71.17.sslip.io` set in 385a39b. Argo CD renders base `values.yaml` only → Let's Encrypt HTTP-01 can't
+     validate the placeholder host → `eurotransit-tls` never issues (breaks §6.3 TLS).
+  2. **Duplicate `letsencrypt-prod` ClusterIssuer.** The kind branch added `clusterissuer-prod.yaml` (placeholder
+     email `team-g03@example.com`) while `clusterissuer.yaml` already defined `letsencrypt-prod` (real email). Two
+     definitions of the same cluster-scoped resource with **different ACME account emails** → applying both is
+     last-write-wins / non-deterministic.
+  3. **CI build broken for every real change.** `app/.github/workflows/ci.yml` `detect-changes` did
+     `echo "services=${{ steps.filter.outputs.changes }}"` — the JSON's own double-quotes terminate the bash string,
+     exporting **invalid JSON**, so `fromJSON` in the build matrix throws and the whole run dies in ~12s before any
+     image is built. It only surfaced now because the backend-fixes merge was the first push to change all five
+     `services/**` folders (earlier pushes touched only ci.yml/docs → matrix empty → build skipped → false green).
+  4. **Doc/pin drift:** `kind-registry/README.md` cited the non-existent `lab02g03registry.azurecr.io`; CNPG `1.29.1`
+     was pinned in `design.md` §4b but missing from `platform/README.md` (the file §4b names as source of truth),
+     violating the "never `latest`/pin in platform/README" rule.
+- **Why wrong:** a merge is not a no-op — resolving a `values.yaml` conflict toward the stale side silently undoes a
+  committed fix; and a CI that is "green" only because the build path never executes proves nothing (deck 08: a
+  pipeline must actually exercise the artifact). The Phase-2 resilience (`app/fase-2`) was also left **unmerged**, so
+  `app/main` after the PR was layer-folder layout **without** any circuit breaker/bulkhead/retry/429/void code.
+- **How caught:** a read-only re-audit of both repos after the PRs (branch-diff + CI run-history + `fromJSON` trace +
+  `git show origin/main:…values.yaml` history) — not by CI, which reported the 12s failure with no actionable log.
+- **Fix:** ci.yml passes the list via a `CHANGES` env var (valid JSON → matrix parses); `clusterissuer-prod.yaml`
+  email aligned to the real account (team to consolidate to ONE letsencrypt-prod file); `kind-registry/README.md` and
+  `platform/README.md` (CNPG `1.29.1` row + new `cert-manager/`/`traefik/`/`kind-registry/` dirs) corrected;
+  `design.md` §4b D-E rewritten to state the regression and that `global.domain` must be reset to the **current**
+  Traefik LB IP (the old `158.158.71.17` belonged to the prior cluster). Phase-2 resilience was re-applied onto the
+  layer-folder layout on `app` branch `fase-3-consolidation` (all 5 services compile; Testcontainers run pending).
+
+## 14. Phase 3 — CI pushed to a registry the chart never pulls from (a fifth consolidation regression)
+
+- **Found (2026-06-28):** a follow-up audit of the GitOps loop, after #13, surfaced a defect #13 missed:
+  `app/.github/workflows/ci.yml` built and pushed to `env.REGISTRY: etg03registry.azurecr.io`, while the chart
+  pulls every service from `labg03clusterregistry.azurecr.io` (`deploy/charts/eurotransit/values.yaml`
+  `global.registry` + the five `services.*.image.repository`). A **third** registry name on top of the
+  `lab02g03registry` ghost already corrected in #13.
+- **Why wrong:** the CI bumps **only** `services.<svc>.image.tag`, never the repository — by design (immutable
+  image, tag is the single CI-mutated field). So even on a green pipeline Argo CD would reconcile the chart to
+  `labg03clusterregistry/eurotransit/<svc>:<sha>`, an image that was pushed to `etg03registry` and therefore does
+  **not exist** there → `ImagePullBackOff` → the app never reaches Healthy. This is precisely the symptom logged in
+  `FASI_PROGETTO.md` ("Argo Synced&Healthy bloccato su immagini ACR"): the blocker was a config split-brain, not a
+  missing image build. A pipeline whose output address differs from what the deployer reads is dead on arrival
+  (deck 08: build and deploy must agree on the artifact coordinate, not just the tag).
+- **How caught:** read-only cross-repo diff of the image coordinate — `env.REGISTRY` in `ci.yml` vs `global.registry`
+  + `image.repository` in `values.yaml` — not by CI (no job asserts the two registries match).
+- **Fix:** `ci.yml` `REGISTRY` aligned to `labg03clusterregistry.azurecr.io` (the registry attached to the cluster
+  per D-G; `ACR_USERNAME/ACR_PASSWORD` secrets must belong to it). Also **completed #13's open item**: the duplicate
+  `platform/cert-manager/clusterissuer-prod.yaml` was deleted, leaving `clusterissuer.yaml` (staging+prod, real
+  email) as the single AKS source — which also fits the staging→prod issuance chosen for the first cert.
+  Open follow-up (not code): the `158.158.71.17.sslip.io` in `values.yaml` belonged to the **prior** cluster (#13);
+  it must be re-confirmed against the live Traefik LB IP after `az aks start` before issuing the cert.
+
+## 15. Phase 2 #7 — a new `@SpringBootTest` guard leaked shared-context state into a sibling test
+
+- **What the agent produced:** `MetricCardinalityGuardTest` (orders, §7.3 low-cardinality guard). To register a
+  real shed counter it shrank the intake budget via inlined `@SpringBootTest(properties=[… ratelimiter…
+  limit-for-period=1 …])` — copying the **exact** property set already used by `OrdersIntakeRateLimiterTest`.
+- **Why wrong:** Spring's test context cache keys on the merged config (inlined properties included). Identical
+  properties → both classes **share one cached context** → one singleton `RateLimiter("orders-intake")`. The guard
+  consumed the single per-window permit, so when the sibling ran in the same context its first `place()` (expected
+  `202 ACCEPTED`) was shed → `OrdersIntakeRateLimiterTest` failed. Green in isolation, red in the full suite — the
+  worst kind: a test that only fails when run with its neighbours.
+- **How caught:** running the **whole** orders suite, not just the two new tests (`./gradlew test` → `34 tests,
+  1 failed`). Running only the new tests had passed and would have shipped the leak.
+- **Fix:** made the guard's property set **distinct** (`limit-for-period=2`, consume 2 then shed) so it gets its
+  **own** cached context — no shared singleton, no leak. Lesson: an inlined-property `@SpringBootTest` that mutates
+  a singleton (rate limiter / breaker / registry) must not share a context with tests that assert on that
+  singleton's fresh state; vary the config or `@DirtiesContext`.
+- **Related (not a bug, a doc nuance):** the §7.5 note first claimed "`kubectl logs` shows JSON" as if already live.
+  The cluster runs the Fase-3 image (`3af035e`), predating the structured-logging config → live logs are still
+  plain; JSON ECS appears only after a CI rebuild. Doc corrected to say "post-deploy".
+
+## 16. Phase 2 #6 live validation — topology spread is `ScheduleAnyway` (soft), so it co-located both payments replicas
+
+- **What surfaced:** during the live §6 validation, `kubectl get pods -o wide` showed **both** `payments` replicas
+  on the same node (`…00000d`), despite a `topologySpreadConstraints{maxSkew:1, topologyKey: hostname}`.
+- **Why it matters:** the constraint uses `whenUnsatisfiable: ScheduleAnyway` → it is a **preference**, not a
+  guarantee. The scheduler packed both pods on one node; a single node failure would take out the entire payments
+  capacity — exactly the failure-domain co-location the spread is meant to prevent (deck 11: "replication protects
+  only if replicas are across independent failure domains").
+- **How caught:** reading live pod placement against node identity (not assuming the manifest's intent equals the
+  runtime result). The chart *had* the constraint; only the live cluster revealed it wasn't binding.
+- **Decision (team-owned, not auto-applied):** `DoNotSchedule` would make the spread a hard guarantee, but on a
+  3-node cluster it risks unschedulable pods during a drain/upgrade. Trade-off availability vs hard anti-affinity —
+  left as a documented finding for the team to resolve in `deploy/charts/eurotransit` + `docs/design.md`, not
+  silently changed by the agent.
+
 ---
 
 _Add new entries as they happen. Aim well past the required three; every caught mistake is
