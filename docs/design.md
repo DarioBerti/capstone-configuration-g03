@@ -237,6 +237,37 @@ Bringing the system onto a real cluster (Azure AKS), reconciled by Argo CD. Labe
 - ~~D12 variant (inventory-db 3 vs 2 instances)~~ → **resolved: stays at 3** (survives one replica loss without
   blocking writes; confirmed in the Phase 3 plan, no chart change).
 
-## 6. Async cost analysis (Pillar A) — to complete
-Where async reduces cost/scaling pressure in EuroTransit (I/O-bound waits: waiting on Payments,
-on Kafka, on DB) vs where it does not help (CPU-bound work). Reference blocking-vs-suspending.
+## 6. Async cost analysis (Pillar A)
+
+The async lecture's frame (deck 06): a **blocking** call parks a whole OS thread while it waits; a
+**suspending** call frees the thread to do other work and resumes later. So async pays off exactly where
+work is **I/O-/wait-dominated**, and pays nothing (or costs more in complexity) where work is **CPU-bound**.
+Mapped onto EuroTransit:
+
+**Where async reduces cost / scaling pressure here**
+- **The 202 intake.** `POST /api/orders` commits the order + outbox row and returns immediately; the
+  reserve→authorize→confirm latency is taken off the request path. User-facing latency is decoupled from
+  downstream latency, so a slow Payments does not hold the caller's connection/thread.
+- **Kafka between stages.** Eventing decouples producers from consumers and absorbs bursts in the log
+  (bounded, replayable) instead of piling them onto threads — this is what lets backpressure (§3, 429) and
+  the consumer's manual-ack flow shed/level load rather than collapse (deck 11 "queues just delay the failure"
+  → we bound them).
+- **The background coroutines** (`OutboxPublisher` relay, `OrderRecoverySweeper`, `ReservationReconciler`).
+  Each is one supervised coroutine that spends almost all its time **suspended in `delay()`**, not a parked
+  thread — near-zero footprint for "always-on" polling, and they cancel cooperatively on SIGTERM.
+
+**Where async does NOT help (CPU-/DB-bound — the honest other half)**
+- **The contended reservation.** Inventory's bottleneck is the **single hot row** serialised by the Postgres
+  row lock, not thread availability. Making the call "more async" adds zero reservation throughput — which is
+  exactly why **Inventory has no HPA** (scaling pods can't beat a single-row serialisation point; deck 10
+  "scale on saturation, not CPU"). The right lever there is the DB / consistency model, not concurrency.
+- **Serialization / JSON / the atomic UPDATE itself** are CPU- and DB-bound; you cannot "suspend" your way
+  out of work that has to actually execute.
+
+**Blocking-vs-suspending in our own code (the deliberate consequence).** Our gateway calls use a **blocking**
+HTTP client (`RestClient`) and **blocking** JDBC, so we do **not** pretend they are non-blocking: the recovery
+sweep runs on **`Dispatchers.IO`** (the elastic pool sized for blocking I/O), while the purely
+timer-driven relays use `Dispatchers.Default` — placing blocking work on the IO pool and CPU-light work on the
+CPU pool is precisely the blocking-vs-suspending guidance from deck 06. Net: async is leverage on the
+wait-dominated edges (ack, eventing, background sweeps); on the genuinely CPU/DB-bound core we lean on the
+data model and the consistency choice instead.

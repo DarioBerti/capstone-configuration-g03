@@ -1,0 +1,42 @@
+# Dashboards as code: each JSON becomes a ConfigMap that the kube-prometheus-stack Grafana sidecar
+# auto-loads (it watches ConfigMaps labelled `grafana_dashboard: "1"`). Apply once (platform, not Argo):
+#
+#   kubectl apply -k platform/observability/dashboards/
+#
+# Validate offline (no cluster) — renders the ConfigMaps so you can see the JSON embeds cleanly:
+#   kubectl kustomize platform/observability/dashboards/
+#
+# Namespace = monitoring because that is where the stack's Grafana + its dashboard sidecar run by default
+# (the sidecar's searchNamespace defaults to its own namespace). If your install sets searchNamespace=ALL,
+# these can live anywhere. The datasource is NOT hardcoded: each dashboard exposes a `datasource` template
+# variable, so it binds to whatever Prometheus datasource the install provisions (portable across clusters).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+# disableNameSuffixHash: keep stable ConfigMap names (the sidecar keys off the name; a hash suffix would
+# create a new dashboard on every change instead of updating in place).
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: EuroTransit
+
+configMapGenerator:
+  - name: eurotransit-dashboard-red
+    files:
+      - eurotransit-red.json
+  - name: eurotransit-dashboard-runtime
+    files:
+      - eurotransit-runtime.json
+  # NOT wired by default: these two depend on metrics from exporters we have not confirmed are scraped
+  # (kafka-exporter / Micrometer Kafka binder for lag; CNPG PodMonitor for cnpg_*). The JSON ships ready;
+  # uncomment once the source metrics show up in Prometheus, so we never publish empty-looking dashboards.
+  # - name: eurotransit-dashboard-kafka
+  #   files:
+  #     - eurotransit-kafka.json
+  # - name: eurotransit-dashboard-cnpg
+  #   files:
+  #     - eurotransit-cnpg.json

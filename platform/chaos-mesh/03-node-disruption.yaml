@@ -1,0 +1,39 @@
+# Chaos experiment 03 — node / AZ-style disruption (runbook: docs/chaos/03-node-disruption.md).
+#
+# This experiment is INTENTIONALLY NOT a Chaos Mesh CR. Vanilla Chaos Mesh cannot evict/kill a managed
+# AKS node (that needs PhysicalMachineChaos + a chaosd agent on the host, which we don't run). The
+# property under test — PodDisruptionBudget (minAvailable: 1) + topologySpreadConstraints keep >=1 replica
+# of each critical-path service Ready — is a VOLUNTARY disruption property, and `kubectl drain` is exactly
+# the voluntary-eviction path PDBs govern. So the method is a drain, documented here as runnable commands.
+#
+# Cluster reality (documented in docs/chaos/fase2-6-k8s-validation.md): the AKS pool is 3x B2s_v2 = 6 vCPU
+# and fully booked, so an INVOLUNTARY node-kill can leave pods Pending (no spare capacity). Prefer a drain.
+#
+# RUN (voluntary disruption, PDB-governed):
+#   kubectl get nodes
+#   kubectl get pods -n eurotransit -o wide        # note how orders/inventory/payments are spread
+#   NODE=<pick a node hosting a critical-path replica>
+#   kubectl cordon "$NODE"                          # stop new scheduling there
+#   kubectl drain "$NODE" --ignore-daemonsets --delete-emptydir-data --timeout=120s
+#   # OBSERVE: evictions respect the PDBs (>=1 replica of each critical service stays Ready); the orders RED
+#   #          panel stays within SLO; note any pod that goes Pending (the documented 6-vCPU quota finding).
+#   kubectl uncordon "$NODE"                         # restore scheduling when done
+#
+# INVOLUNTARY alternative (true node loss): stop one node from Azure
+#   (az vmss ... / portal) — expect Pending pods on this small cluster; this exercises the involuntary path
+#   that PDBs do NOT protect, which is itself a useful finding to document.
+#
+# OPTIONAL Chaos Mesh stand-in (NOT a node failure — only kills pods on one node to mimic the reschedule):
+# uncomment and set the node name to simulate losing the pods of a node without draining it.
+# ---
+# apiVersion: chaos-mesh.org/v1alpha1
+# kind: PodChaos
+# metadata:
+#   name: node-podkill-sim
+#   namespace: eurotransit
+# spec:
+#   action: pod-kill
+#   mode: all
+#   selector:
+#     namespaces: [eurotransit]
+#     nodes: ["<NODE_NAME>"]            # all eurotransit pods scheduled on this node

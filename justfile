@@ -303,7 +303,56 @@ bootstrap-kind: cluster-up registry-up traefik-install certmanager-install cnpg-
     @echo ">> kind cluster + registry + platform + Keycloak operator ready."
     @echo ">> next:  just images-kind   &&   just app-deploy"
 
+# ── platform: observability (Step 5) ───────────────────────────────────────
+# NB: pin --version <verified> on the helm installs below for reproducibility (the recipes above do);
+# left unpinned here so a stale pin can't silently break the install — verify the latest stable first.
+
+# install/upgrade the kube-prometheus-stack. Release name MUST be `kube-prometheus-stack` so its
+# serviceMonitorSelector/ruleSelector (release: <name>) adopts our CRs (values.yaml observability.prometheusRelease).
+kube-prometheus-install:
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    helm repo update prometheus-community
+    helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+      --namespace monitoring --create-namespace --wait
+
+# deploy the OpenTelemetry Collector gateway + Grafana Tempo, then the dashboards-as-code ConfigMaps
+observability-install: kube-prometheus-install
+    kubectl --context {{ctx}} create namespace observability --dry-run=client -o yaml | kubectl --context {{ctx}} apply -f -
+    kubectl --context {{ctx}} apply -f platform/observability/otel-collector.yaml
+    helm repo add grafana https://grafana.github.io/helm-charts
+    helm repo update grafana
+    helm upgrade --install tempo grafana/tempo \
+      --namespace observability --create-namespace \
+      -f platform/observability/tempo-values.yaml --wait
+    kubectl --context {{ctx}} apply -k platform/observability/dashboards/
+    @echo ">> verify: kubectl -n eurotransit get servicemonitor,prometheusrule  (Prometheus UI -> Targets/Rules)"
+
+# verify adoption: our ServiceMonitors/PrometheusRule exist and (best-effort) the stack pods are up
+observability-verify:
+    kubectl --context {{ctx}} -n eurotransit get servicemonitor,prometheusrule
+    kubectl --context {{ctx}} -n monitoring get pods -l release=kube-prometheus-stack
+    @echo ">> in the Prometheus UI: Status -> Targets (6 services UP), Status -> Rules (eurotransit-checkout-slo)"
+
+# ── platform: chaos engineering ─────────────────────────────────────────────
+
+# install/upgrade Chaos Mesh (containerd runtime — matches kind/AKS nodes). Experiments are applied by hand.
+chaos-install:
+    helm repo add chaos-mesh https://charts.chaos-mesh.org
+    helm repo update chaos-mesh
+    helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
+      --namespace chaos-mesh --create-namespace \
+      --set chaosDaemon.runtime=containerd \
+      --set chaosDaemon.socketPath=/run/containerd/containerd.sock --wait
+
+# ── load generation (k6 money path) ─────────────────────────────────────────
+
+# run the k6 money-path load test. Usage: `just loadtest https://<host> <jwt>` (token optional but the
+# secured endpoints need one). Tune with K6_VUS / K6_DURATION env, e.g. `K6_VUS=20 just loadtest <url> <jwt>`.
+loadtest base_url token="":
+    k6 run -e BASE_URL={{base_url}} -e TOKEN={{token}} \
+      -e VUS=${K6_VUS:-10} -e DURATION=${K6_DURATION:-5m} \
+      platform/k6/money-path.js
+
 # ── platform: next steps (add recipes as we install each) ───────────────────
 # sealedsecrets-install: ...   (Step 4)
-# observability-install: ...   (Step 5)
 # argocd-install:        ...   (Step 6)

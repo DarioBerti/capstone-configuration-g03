@@ -1,0 +1,101 @@
+# OpenTelemetry Collector — tracing GATEWAY (platform, install-once; NOT Argo-managed).
+#
+# Why a gateway collector (and not the apps exporting straight to Tempo): the services stay
+# backend-agnostic — they only know "send OTLP to otel-collector:4318" — and batching/sampling/
+# routing is configured in ONE place. The Service is named `otel-collector` in namespace
+# `observability` ON PURPOSE: the app Deployments already point their tracing at
+# `http://otel-collector.observability.svc:4318/v1/traces`, so this name/namespace makes that
+# existing endpoint resolve with NO chart change.
+#
+# Pipeline: receive OTLP (http 4318 + grpc 4317) -> batch -> export OTLP to Tempo (grpc 4317).
+# Apply once:  kubectl apply -n observability -f platform/observability/otel-collector.yaml
+# (create the namespace first: kubectl create namespace observability)
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: eurotransit
+data:
+  # The Collector's own config file (mounted into the container, passed via --config).
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318   # what the services send to (matches the apps' OTLP endpoint)
+          grpc:
+            endpoint: 0.0.0.0:4317
+    processors:
+      batch: {}                      # batch spans before export (throughput; bounded buffering)
+    exporters:
+      otlp/tempo:
+        # Tempo's OTLP gRPC ingest. Adjust the host if the Tempo Service name differs (see tempo-values.yaml).
+        endpoint: tempo.observability.svc.cluster.local:4317
+        tls:
+          insecure: true             # in-cluster plaintext to Tempo (demo); fine on the pod network
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [otlp/tempo]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: eurotransit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+        app.kubernetes.io/part-of: eurotransit
+    spec:
+      containers:
+        - name: otel-collector
+          # Pin an explicit version (verify the latest stable before installing — never `latest`).
+          image: otel/opentelemetry-collector:0.112.0
+          args: ["--config=/etc/otelcol/config.yaml"]   # explicit config path (don't rely on the image default)
+          ports:
+            - { name: otlp-http, containerPort: 4318 }
+            - { name: otlp-grpc, containerPort: 4317 }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector            # MUST stay `otel-collector` to match the apps' OTLP endpoint
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: eurotransit
+spec:
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - { name: otlp-http, port: 4318, targetPort: otlp-http }
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }

@@ -1,0 +1,135 @@
+{{- /*
+Observability wiring for the money path (Phase 4): tells the kube-prometheus-stack WHAT to scrape and WHICH
+symptom alerts to evaluate. Two kinds of CR (from the Prometheus Operator, group monitoring.coreos.com):
+  - ServiceMonitor: one per service -> scrape each Service's /actuator/prometheus (Micrometer metrics).
+  - PrometheusRule: the checkout SLO recording rules + multi-window burn-rate alerts.
+
+Design choices baked in here:
+  - The SLO is built on the STANDARD Actuator metric `http_server_requests_seconds*` (always present), NOT on
+    business metrics, so it does not break when the domain model is reworked.
+  - We alert ONLY on user-visible symptoms (error-budget burn, sustained high latency), never on CPU/memory and
+    never on circuit-breaker/bulkhead/429 state (those are designed controlled-failure behaviours).
+  - A 429 (load shedding) is NOT counted as an error (status!~"5.."), so controlled refusal never burns the budget.
+
+Safety / bullet-proofing:
+  - The whole file is gated by `observability.enabled` (set in values.yaml, default true; flip it to false to
+    disable without deleting anything). The `| default dict` below is a fail-closed guard: if the block were
+    ever removed from values.yaml the template renders NOTHING instead of erroring and breaking the chart.
+  - These CRs are INERT unless the kube-prometheus-stack selects them: it must watch this namespace and match the
+    `release` label below. If the stack does not select them, nothing here can break the app deploy.
+  - Requires the Prometheus Operator CRDs (ServiceMonitor/PrometheusRule) to exist on the cluster — they do, the
+    stack is already installed. `helm template` does not need them.
+*/ -}}
+{{- /* Bind the observability config from values.yaml. `| default dict` is the fail-closed guard described
+       above (a missing block disables the feature instead of erroring). Every knob is defined in values.yaml,
+       so it stays a single source of truth that is tunable from the chart's control panel. */}}
+{{- $obs := .Values.observability | default dict }}
+{{- if $obs.enabled }}
+{{- /* The label the kube-prometheus-stack selects monitors/rules by (values: observability.prometheusRelease). */}}
+{{- $release := $obs.prometheusRelease }}
+{{- /* SLO target as a fraction (0.99 = 99%); error budget = 1 - target, used as the burn-rate denominator. */}}
+{{- $successTarget := $obs.checkoutSuccessTarget }}
+{{- /* p99 ack-latency objective in SECONDS for the intake POST /api/orders. */}}
+{{- $latencyP99Seconds := $obs.checkoutAckP99Seconds }}
+
+{{- /* One ServiceMonitor per service: scrape its /actuator/prometheus on the named http port. */}}
+{{- range $name, $svc := .Values.services }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $name }}
+  labels:
+    # part-of ties it to our app; `release` is what the kube-prometheus-stack matches on to adopt this monitor
+    app.kubernetes.io/part-of: eurotransit
+    release: {{ $release }}
+spec:
+  # pick the Service of THIS service (same stable selector labels the Service/Deployment use)
+  selector:
+    matchLabels:
+      {{- include "eurotransit.selectorLabels" (dict "svc" $name) | nindent 6 }}
+  endpoints:
+    - port: http                      # the Service port is named "http" -> scrape there
+      path: /actuator/prometheus      # Micrometer's Prometheus endpoint (exposed by Actuator)
+      interval: 15s                   # scrape cadence
+{{- end }}
+---
+# All the checkout SLO logic in one rule object: recording rules pre-compute the error ratio over each window,
+# then the burn-rate alerts compare them to the budget. Pre-computing keeps the alert expressions readable and
+# lets dashboards reuse the same series.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: eurotransit-checkout-slo
+  labels:
+    app.kubernetes.io/part-of: eurotransit
+    release: {{ $release }}
+spec:
+  groups:
+    - name: eurotransit-checkout-slo
+      rules:
+        # --- Recording rules: error ratio of the intake (POST /api/orders) over 4 windows ---------------------
+        # error = server error (5xx). A 429 shed is NOT an error (status!~"5.."), so shedding never burns budget.
+        # NaN when there is no traffic in the window is harmless: NaN compared in the alerts below is always false.
+        - record: checkout_intake:error_ratio:rate5m
+          expr: |
+            sum(rate(http_server_requests_seconds_count{uri="/api/orders", method="POST", status=~"5.."}[5m]))
+              /
+            sum(rate(http_server_requests_seconds_count{uri="/api/orders", method="POST"}[5m]))
+        - record: checkout_intake:error_ratio:rate30m
+          expr: |
+            sum(rate(http_server_requests_seconds_count{uri="/api/orders", method="POST", status=~"5.."}[30m]))
+              /
+            sum(rate(http_server_requests_seconds_count{uri="/api/orders", method="POST"}[30m]))
+        - record: checkout_intake:error_ratio:rate1h
+          expr: |
+            sum(rate(http_server_requests_seconds_count{uri="/api/orders", method="POST", status=~"5.."}[1h]))
+              /
+            sum(rate(http_server_requests_seconds_count{uri="/api/orders", method="POST"}[1h]))
+        - record: checkout_intake:error_ratio:rate6h
+          expr: |
+            sum(rate(http_server_requests_seconds_count{uri="/api/orders", method="POST", status=~"5.."}[6h]))
+              /
+            sum(rate(http_server_requests_seconds_count{uri="/api/orders", method="POST"}[6h]))
+
+        # --- Burn-rate alerts: page only when a FAST and a SLOW window burn together (cuts false alarms) --------
+        # budget = 1 - successTarget; burn = errorRatio / budget. Fast: 1h & 5m > 14.4x. Slow: 6h & 30m > 6x.
+        - alert: CheckoutIntakeErrorBudgetBurnFast
+          expr: |
+            checkout_intake:error_ratio:rate1h / (1 - {{ $successTarget }}) > 14.4
+              and
+            checkout_intake:error_ratio:rate5m / (1 - {{ $successTarget }}) > 14.4
+          for: 2m
+          labels:
+            severity: page
+            slo: checkout-success-rate
+          annotations:
+            summary: "Checkout intake burning the error budget fast (1h & 5m windows > 14.4x)"
+            description: "POST /api/orders 5xx rate is consuming the success-rate error budget ~14.4x too fast; the money-path entry is failing for users."
+        - alert: CheckoutIntakeErrorBudgetBurnSlow
+          expr: |
+            checkout_intake:error_ratio:rate6h / (1 - {{ $successTarget }}) > 6
+              and
+            checkout_intake:error_ratio:rate30m / (1 - {{ $successTarget }}) > 6
+          for: 15m
+          labels:
+            severity: page
+            slo: checkout-success-rate
+          annotations:
+            summary: "Checkout intake burning the error budget slowly (6h & 30m windows > 6x)"
+            description: "A sustained elevated 5xx rate on POST /api/orders is slowly draining the success-rate error budget."
+
+        # --- Latency SLO: p99 of the synchronous ack stays under the objective (sustained breach = symptom) -----
+        - alert: CheckoutIntakeAckLatencyHigh
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le) (rate(http_server_requests_seconds_bucket{uri="/api/orders", method="POST"}[5m])))
+              > {{ $latencyP99Seconds }}
+          for: 10m
+          labels:
+            severity: page
+            slo: checkout-ack-latency
+          annotations:
+            summary: "Checkout intake ack p99 above objective"
+            description: "The synchronous POST /api/orders ack p99 has stayed above the latency objective for 10m; the intake itself is slow (independent of the async saga)."
+{{- end }}

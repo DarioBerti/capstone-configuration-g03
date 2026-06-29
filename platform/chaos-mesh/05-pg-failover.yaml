@@ -1,0 +1,32 @@
+# Chaos experiment 05 — CloudNativePG primary failover on inventory-db (runbook: docs/chaos/05-pg-failover.md).
+#
+# Goal: prove synchronous replication (inventory-db: 3 instances, dataDurability=required -> RPO=0) means a
+# primary loss costs a brief write stall during promotion but loses NO committed reservation, so "never
+# oversell" still holds and the intake SLI recovers within RTO <= 60 s.
+#
+# Kill the PRIMARY pod only. CNPG labels the current primary with `role: primary` (and, on newer operators,
+# also `cnpg.io/instanceRole: primary`). Verify the label before running:
+#   kubectl get pods -n eurotransit -l cnpg.io/cluster=inventory-db -L role,cnpg.io/instanceRole
+#
+# RUN under steady reservation load and measure time-to-recovery of the intake success-rate SLI:
+#   kubectl cnpg status inventory-db -n eurotransit        # before: 1 primary + 2 synchronous standbys
+#   kubectl apply -f platform/chaos-mesh/05-pg-failover.yaml
+#   kubectl cnpg status inventory-db -n eurotransit        # watch promotion of a standby
+#   # verify post-failover: available seats == pre-failover committed state (no lost reservation)
+#   kubectl delete -f platform/chaos-mesh/05-pg-failover.yaml
+#
+# Plain alternative (no Chaos Mesh): kubectl delete pod <inventory-db-primary> -n eurotransit
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: inventory-db-primary-kill
+  namespace: eurotransit
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [eurotransit]
+    labelSelectors:
+      cnpg.io/cluster: inventory-db
+      # target the PRIMARY specifically (not a standby) so we actually trigger a promotion/failover
+      role: primary

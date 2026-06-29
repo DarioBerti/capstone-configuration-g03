@@ -1,0 +1,103 @@
+{
+  "uid": "eurotransit-cnpg",
+  "title": "EuroTransit — CloudNativePG (databases)",
+  "tags": ["eurotransit", "cnpg", "postgres"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "datasource",
+        "label": "Data source",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "options": []
+      },
+      {
+        "type": "query",
+        "name": "pod",
+        "label": "Instance (pod)",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(cnpg_collector_up, pod)",
+        "definition": "label_values(cnpg_collector_up, pod)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "options": [],
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Prerequisite",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Empty panels?** This dashboard needs CloudNativePG metrics scraped. CNPG exposes a `cnpg_*` metrics endpoint per instance; enable monitoring on the Cluster CRs (`spec.monitoring.enablePodMonitor: true`) so the kube-prometheus-stack scrapes them. Verify the exact series names against your CNPG version. The money-path invariant lives in `inventory-db` (3 instances, synchronous, RPO=0) — watch its replication closely."
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Replication lag (s) by instance",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "max by (pod) (cnpg_pg_replication_lag{pod=~\"$pod\"})",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Streaming replicas (sync standbys) by cluster",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "max by (pod) (cnpg_pg_replication_streaming_replicas)",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Database size (bytes)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "max by (pod, datname) (cnpg_pg_database_size_bytes)",
+          "legendFormat": "{{pod}} / {{datname}}"
+        }
+      ]
+    }
+  ]
+}

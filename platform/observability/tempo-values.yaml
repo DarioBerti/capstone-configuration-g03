@@ -1,0 +1,38 @@
+# Grafana Tempo — tracing backend (platform, install-once via Helm; NOT Argo-managed).
+#
+# Single-binary ("monolithic") Tempo: enough for demo scale, one pod, OTLP ingest enabled so the
+# OTel Collector can push spans to it. Install (pin the chart version — verify the latest stable):
+#
+#   helm repo add grafana https://grafana.github.io/helm-charts && helm repo update
+#   helm upgrade --install tempo grafana/tempo -n observability --create-namespace \
+#     -f platform/observability/tempo-values.yaml --version <PINNED>
+#
+# The chart creates a Service named `tempo` in ns `observability` -> matches the OTel Collector exporter
+# endpoint `tempo.observability.svc.cluster.local:4317` in otel-collector.yaml.
+#
+# After install: add Tempo as a Grafana datasource (URL http://tempo.observability.svc:3200) so traces
+# and metrics share one UI (and exemplars can jump metric -> trace).
+
+tempo:
+  # Accept OTLP from the OTel Collector (gRPC 4317 + HTTP 4318).
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+  # Demo retention: keep traces short to bound disk on the small cluster.
+  retention: 24h
+
+# Demo-scale footprint (bound resources on the 3x B2s_v2 / 6 vCPU cluster).
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+# Ephemeral storage is fine for the demo (traces are short-lived diagnostics, not system-of-record).
+persistence:
+  enabled: false

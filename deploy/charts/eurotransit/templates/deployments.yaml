@@ -58,9 +58,10 @@ spec:
             # details, ECS JSON logs) — applies to stateless services like notifications too, not just DB ones
             - name: SPRING_PROFILES_ACTIVE
               value: "cluster"
-            # where to ship traces (OTLP); overrides the local default baked in the image
+            # where to ship traces (OTLP); overrides the local default baked in the image.
+            # Read from global.otlpEndpoint ($ = chart root, since inside the services range . is the service).
             - name: MANAGEMENT_OTLP_TRACING_ENDPOINT
-              value: "http://otel-collector.observability.svc:4318/v1/traces"
+              value: {{ $.Values.global.otlpEndpoint | quote }}
             {{- if $svc.usesKafka }}
             # Kafka bootstrap address (only injected for services that produce/consume events)
             - name: KAFKA_BOOTSTRAP

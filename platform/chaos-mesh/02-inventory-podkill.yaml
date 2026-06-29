@@ -1,0 +1,24 @@
+# Chaos experiment 02 — pod-kill on Inventory mid-reservation (runbook: docs/chaos/02-inventory-podkill.md).
+#
+# Goal: prove "never oversell" + no double-charge survive a pod dying mid-reservation. The atomic
+# `UPDATE ... WHERE available >= qty` either commits or not; UNIQUE(order_id, product_id) makes a redelivered
+# reserve a no-op; at-least-once Kafka + idempotent handlers converge to exactly one outcome per order.
+#
+# Run DURING a burst of concurrent orders for the SAME scarce SKU (e.g. the 1-seat demo product):
+#   kubectl apply -f platform/chaos-mesh/02-inventory-podkill.yaml
+#   # then assert: available never < 0; RESERVED+CONFIRMED <= seats; one authorization per order
+#   kubectl delete -f platform/chaos-mesh/02-inventory-podkill.yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: inventory-podkill
+  namespace: eurotransit
+spec:
+  action: pod-kill
+  # `one` = kill a single Inventory replica (the other replica keeps serving — we test convergence, not an outage)
+  mode: one
+  selector:
+    namespaces: [eurotransit]
+    labelSelectors:
+      app.kubernetes.io/name: inventory
+  # pod-kill is one-shot (the pod is deleted and the Deployment recreates it) — no `duration` needed.
