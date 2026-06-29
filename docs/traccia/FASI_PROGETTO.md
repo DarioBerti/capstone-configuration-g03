@@ -21,9 +21,9 @@ Legenda stato: ✅ fatto · 🔄 in corso · 🔜 prossima · ⬜ da fare
  Fase 1  Core money path       ✅   ← codice dei 5 servizi, tutti i test verdi
  Fase 2  Resilienza            ✅   ← CB/bulkhead/retry/429/void + test; §6 validato LIVE + §7-codice (28/06/2026)
  Fase 3  Piattaforma su cluster ✅   ← verificata sul cluster reale (2026-06-28): Argo Synced&Healthy, sync CNPG, money-path CONFIRMED
- Fase 4  Observability         ⬜
+ Fase 4  Observability         🔄   ← core (metriche+SLO+alert+dashboard) ✅ validato LIVE 2026-06-29; resta TRACING (deferito a kind)
  Fase 5  Progressive delivery  ⬜
- Fase 6  Chaos + postmortem    ⬜
+ Fase 6  Chaos + postmortem    ⬜   ← i 5 esperimenti chaos stanno QUI, non in Fase 4
 ```
 
 Riferimenti utili mentre lavorate:
@@ -79,15 +79,29 @@ Il sistema gira davvero su `lab_g03_cluster` (AKS, 3× B2s_v2), riconciliato da 
 - ✅ Replica **sincrona** CNPG: `inventory-db` (3 ist., `dataDurability=required`) e `orders-db` (2 ist., `preferred`) con standby `streaming sync_state=quorum`, `ANY 1 (...)` → RPO=0. Secret `<db>-app` iniettati (pod `orders`: `DB_HOST=orders-db-rw`, ecc.).
 - ✅ Extra provati: TLS Let's Encrypt **prod** (`158.158.71.17.sslip.io`, HTTP 200 senza `-k`), money-path `POST /api/orders` → `PENDING→RESERVED→CONFIRMED`.
 
-## Fase 4 — Observability ⬜
+## Fase 4 — Observability 🔄 (core ✅ validato LIVE 2026-06-29; manca il tracing)
 
-Dashboard e SLO che **guidano decisioni** (Pilastro D, continua dal Lab05 — ancora da fare).
+Dashboard e SLO che **guidano decisioni** (Pilastro D, continua dal Lab05).
 
-- ⬜ kube-prometheus-stack + **Tempo/OTel Collector** (decisioni già pinnate in `platform/observability`).
-- ⬜ Dashboard **RED** per servizio, **USE** infra, **Kafka consumer lag**, CNPG.
-- ⬜ **SLO** del checkout (success-rate + latenza) con SLI misurate dove deciso in `docs/slo.md`.
-- ⬜ **Alert solo symptom-based** (burn-rate multi-finestra), mai sulla CPU.
-- ⬜ Tracing distribuito che attraversa Kafka (contesto propagato negli header).
+**Validato sul cluster reale `lab_g03_cluster` (2026-06-29, via GitOps — PR #4 mergiata, Argo riconcilia):**
+- ✅ **kube-prometheus-stack** adotta le nostre CR: **6 ServiceMonitor → 17 target** scrapati (catalog/inventory/payments/notifications/orders UP; `users` DOWN = immagine `:latest` mai buildata; 1 pod `orders` DOWN = config-error — roba backend, non observability).
+- ✅ **SLO**: `PrometheusRule eurotransit-checkout-slo` caricata e **`health=ok`** — 4 recording (error-ratio 5m/30m/1h/6h) + 3 **alert symptom-based** (burn-rate fast/slow + ack-latency), mai sulla CPU. SLI come da `docs/slo.md`.
+- ✅ **Dashboard as-code** caricate dalla sidecar Grafana: **RED** per servizio + **Runtime/golden-signals** (JVM heap/CPU/thread/GC, dati live). I pannelli "checkout intake" sono vuoti finché `orders` non serve traffico `/api/orders` (atteso). **USE infra** = dashboard native di kube-prometheus.
+- ⬜ **Tracing distribuito (OTel Collector + Tempo, propagazione cross-Kafka)**: manifest pronti (`platform/observability/otel-collector.yaml`, `tempo-values.yaml`) ma **NON deployati** — il cluster è saturo di CPU-*requests* (vedi finding). Da completare su **kind** (gratis) o con headroom.
+- ⬜ (rifinitura) dashboard **Kafka consumer-lag** + **CNPG** pronte ma gated finché non si abilitano gli exporter (kafka-exporter / CNPG PodMonitor).
+
+> **FINDING capacità — risponde al dubbio "3 nodi non bastano più? strano" (Dario, 2026-06-29).**
+> Non è il *numero* di pod né l'uso reale di CPU (~50% sui nodi). È la **somma delle CPU _requests_** (prenotazioni):
+> lo scheduler piazza i pod per *richiesta riservata*, non per uso effettivo. I 3× B2s_v2 = 6 vCPU (allocatable
+> ~5.4 dopo le riserve di sistema) bastavano per lo stack app (Fase 3 girava). **La Fase 4 ha aggiunto
+> kube-prometheus-stack** (Prometheus + Alertmanager + Grafana + kube-state + node-exporter ×3), che prenota una
+> fetta importante → la somma delle requests supera l'allocatable e i pod "extra" restano **Pending: Insufficient
+> cpu** (visto su `orders-db-2` e `inventory-db-2`, le 3ª/2ª repliche CNPG, su tutti e 3 i nodi). È il costo,
+> previsto, di mettere l'osservabilità su un cluster già pieno. **Opzioni (decisione team):** (a) abbassare
+> requests/repliche non critiche (es. `inventory-db` 3→2, requests più basse), oppure (b) alzare il node pool
+> (più costo — evitato per ora, credito ~63€). Conseguenza pratica: su questo cluster ci stanno **o** gli standby
+> HA al completo **o** lo stack observability + tracing/chaos, non tutto insieme al massimo. Cluster **fermato**
+> (`az aks stop`) a fine sessione per non spendere; tracing e chaos si fanno su **kind** o quando si libera spazio.
 
 ## Fase 5 — Progressive delivery ⬜
 
