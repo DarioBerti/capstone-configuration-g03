@@ -1,0 +1,36 @@
+# Chaos experiment 04 — network partition Orders <-> Kafka (runbook: docs/chaos/04-kafka-partition.md).
+#
+# Goal: prove the transactional outbox + idempotent consumers lose/duplicate nothing. During the partition
+# POST /api/orders still returns 202 (order + outbox row commit locally); the outbox relay retries publishing
+# after the heal (at-least-once); UNIQUE dedup absorbs any redelivery -> the system converges.
+#
+# RUN for ~3 min under steady load, then let it heal (auto-revert via `duration`):
+#   kubectl apply -f platform/chaos-mesh/04-kafka-partition.yaml
+#   # OBSERVE during: outbox `published_at IS NULL` backlog grows, intake still 202
+#   # OBSERVE after:  backlog drains, consumer lag -> ~0, each order reaches exactly one terminal state
+#   kubectl delete -f platform/chaos-mesh/04-kafka-partition.yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: orders-kafka-partition
+  namespace: eurotransit
+spec:
+  action: partition
+  mode: all
+  # one side of the partition: the Orders pods
+  selector:
+    namespaces: [eurotransit]
+    labelSelectors:
+      app.kubernetes.io/name: orders
+  # block traffic in BOTH directions between Orders and the Kafka brokers
+  direction: both
+  # the other side: the Strimzi-managed Kafka broker pods (ns `kafka`). Strimzi stamps every pod of our
+  # cluster with `strimzi.io/cluster: eurotransit`. RF=3/minISR=2 means the cluster itself stays writable;
+  # here we cut ORDERS off from it specifically, which is the scenario the outbox is designed for.
+  target:
+    mode: all
+    selector:
+      namespaces: [kafka]
+      labelSelectors:
+        strimzi.io/cluster: eurotransit
+  duration: "3m"
