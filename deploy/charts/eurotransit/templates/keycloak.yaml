@@ -1,0 +1,57 @@
+{{- /*
+Keycloak instance, reconciled by the Keycloak Operator (installed separately as a platform component:
+platform/argocd/keycloak-operator-application.yaml). It lives in the eurotransit namespace so it can
+read the shared keycloak-db secret and reach the catalog-db Postgres on the cluster-local Service DNS.
+
+TLS is terminated at the Traefik Ingress (see keycloak-ingress.yaml); Keycloak itself serves plain HTTP
+and trusts the X-Forwarded-* headers. The DB is the shared catalog-db cluster (databases.catalog-db),
+database `keycloakdb`, owned by the CNPG-managed `keycloak` role.
+
+NOTE: the Keycloak/KeycloakRealmImport CRDs come from the operator. With Argo CD the operator app syncs
+first; the SkipDryRunOnMissingResource sync-option lets this resource reconcile once the CRD exists.
+*/ -}}
+{{- if .Values.keycloak.enabled }}
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: keycloak
+  labels:
+    app.kubernetes.io/part-of: eurotransit
+    app.kubernetes.io/name: keycloak
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  instances: {{ .Values.keycloak.instances }}
+  image: {{ .Values.keycloak.image }}
+  # We pin the STOCK Keycloak image (not a pre-augmented one). Setting spec.image makes the operator
+  # assume the image is already optimized and skip the build, so --db=postgres (a build-time option)
+  # never gets applied and the server aborts (exit 2). startOptimized=false forces the operator to run
+  # `kc build` at startup so the DB vendor + health options take effect.
+  startOptimized: false
+  db:
+    vendor: postgres
+    host: {{ .Values.keycloak.db.host }}
+    port: 5432
+    database: {{ .Values.keycloak.db.name }}
+    usernameSecret:
+      name: {{ .Values.keycloak.db.secret }}
+      key: username
+    passwordSecret:
+      name: {{ .Values.keycloak.db.secret }}
+      key: password
+  bootstrapAdmin:
+    user:
+      secret: {{ .Values.keycloak.adminSecret }}
+  hostname:
+    # public URL the issuer (`iss` claim) is stamped with — must match global.oidc.issuer's host
+    hostname: https://{{ .Values.keycloak.hostname }}
+  http:
+    # TLS is terminated at the ingress; serve HTTP inside the cluster
+    httpEnabled: true
+  proxy:
+    # behind Traefik: honour X-Forwarded-* so Keycloak builds correct absolute URLs
+    headers: xforwarded
+  ingress:
+    # we manage our own Traefik Ingress (keycloak-ingress.yaml) instead of the operator's default
+    enabled: false
+{{- end }}

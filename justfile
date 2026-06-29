@@ -14,7 +14,7 @@ local_registry := "localhost:5001"
 app_repo       := "../capstone-application-g03"
 image_prefix   := "eurotransit"
 img_tag        := "dev"
-services       := "catalog orders inventory payments notifications"
+services       := "catalog orders inventory payments notifications users"
 
 # default recipe: list everything
 default:
@@ -64,7 +64,7 @@ registry-up:
     # 4. advertise the registry (standard kind ConfigMap)
     kubectl --context {{ctx}} apply -f platform/kind-registry/local-registry-hosting.yaml
 
-# build the 5 services (native arch) and push them to the local registry as :dev
+# build the services + the debug SPA (native arch) and push them to the local registry as :dev
 images-kind:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -74,6 +74,11 @@ images-kind:
       docker build -t "$img" "{{app_repo}}/services/$s"
       docker push "$img"
     done
+    # debug SPA: VITE_KEYCLOAK_URL is baked at build time -> point it at the kind Keycloak ingress host
+    fe="{{local_registry}}/{{image_prefix}}/frontend:{{img_tag}}"
+    echo "== build + push $fe (native $(uname -m)) =="
+    docker build --build-arg VITE_KEYCLOAK_URL=https://auth.localhost -t "$fe" "{{app_repo}}/frontend"
+    docker push "$fe"
 
 # ── platform: traefik (ingress controller) ─────────────────────────────────
 
@@ -135,6 +140,21 @@ strimzi-install:
 kafka-kind-apply:
     kubectl --context {{ctx}} apply -f platform/strimzi/kafka-kind.yaml
 
+# install the Keycloak Operator (CRDs + controller) into the eurotransit namespace. MUST run before
+# `app-deploy` so the chart's Keycloak/KeycloakRealmImport CRs have their CRDs. -k uses the kustomize base.
+keycloak-install:
+    kubectl --context {{ctx}} create namespace eurotransit --dry-run=client -o yaml | kubectl --context {{ctx}} apply -f -
+    kubectl --context {{ctx}} apply -k platform/keycloak/operator
+    @echo ">> waiting for the Keycloak CRDs to register ..."
+    kubectl --context {{ctx}} wait --for=condition=established --timeout=120s \
+      crd/keycloaks.k8s.keycloak.org crd/keycloakrealmimports.k8s.keycloak.org
+
+# verify Keycloak: operator running, the Keycloak CR + realm import reconciled, login ingress present
+keycloak-verify:
+    kubectl --context {{ctx}} -n eurotransit get pods -l app.kubernetes.io/name=keycloak-operator
+    kubectl --context {{ctx}} -n eurotransit get keycloak,keycloakrealmimport
+    kubectl --context {{ctx}} -n eurotransit get ingress keycloak
+
 # verify Step 3: CRDs present, operators Running, Kafka cluster + topics Ready
 data-verify:
     @kubectl --context {{ctx}} get crd | grep -E "cnpg|strimzi" || true
@@ -183,14 +203,14 @@ kafka-forward local_port="9092":
     @echo ">> forwarding svc/eurotransit-kafka-bootstrap -> localhost:{{local_port}} (Ctrl-C to stop) ..."
     kubectl --context {{ctx}} -n kafka port-forward svc/eurotransit-kafka-bootstrap {{local_port}}:9092
 
-# ── whole-app local dev (run all 5 services in your IDE, data layer in kind) ─
+# ── whole-app local dev (run all 6 services in your IDE, data layer in kind) ─
 # Workflow:  just dev-down   (free the cluster of app pods so they don't fight your local ones)
-#            just dev-forward-all   (leave running in a tab — tunnels every DB + Kafka)
+#            just dev-forward-all   (leave running in a tab — tunnels every DB + Kafka + Keycloak)
 #            just dev-env           (prints the IntelliJ env block per service)
 #            ...debug in IntelliJ...
 #            just dev-up     (redeploy the pods into the cluster when you're done)
 
-# scale the 5 app Deployments to 0 (DB + Kafka keep running) so local JVMs own the work
+# scale the 6 app Deployments to 0 (DB + Kafka keep running) so local JVMs own the work
 dev-down:
     kubectl --context {{ctx}} -n eurotransit scale deploy --all --replicas=0
     @echo ">> app pods scaled to 0. CNPG databases + Kafka still running."
@@ -200,7 +220,7 @@ dev-down:
 dev-up: app-deploy
     @echo ">> app pods restored in-cluster."
 
-# background a port-forward for every DB (distinct local ports) + Kafka; Ctrl-C stops them all
+# background a port-forward for every DB (distinct local ports) + Kafka + Keycloak; Ctrl-C stops them all
 dev-forward-all:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -215,7 +235,11 @@ dev-forward-all:
     fwd 5433:5432 eurotransit orders-db-rw
     fwd 5434:5432 eurotransit inventory-db-rw
     fwd 5435:5432 eurotransit payments-db-rw
+    fwd 5436:5432 eurotransit users-db-rw
     fwd 9092:9092 kafka       eurotransit-kafka-bootstrap
+    # Keycloak on :8180 so the secured services' default KEYCLOAK_JWK_SET_URI (localhost:8180) resolves
+    # locally; the token's real issuer (https://auth.localhost) is matched via KEYCLOAK_ISSUER in dev-env.
+    fwd 8180:8080 eurotransit keycloak-service
     echo ">> all forwards up. Leave this tab running; Ctrl-C to stop them all."
     wait
 
@@ -224,20 +248,27 @@ dev-env:
     #!/usr/bin/env bash
     set -euo pipefail
     pw() { kubectl --context {{ctx}} -n eurotransit get secret "$1-db-app" -o jsonpath='{.data.password}' | base64 -d; }
+    # OIDC for the SECURED resource servers (catalog/orders/inventory/payments/users). The token's `iss`
+    # is the operator's fixed hostname (https://auth.localhost); JWKS is fetched from the :8180 Keycloak
+    # forward set up by dev-forward-all. notifications is unsecured, so it gets no KC env.
+    kc="KEYCLOAK_ISSUER=https://auth.localhost/realms/eurotransit;KEYCLOAK_JWK_SET_URI=http://localhost:8180/realms/eurotransit/protocol/openid-connect/certs"
     echo "SEMICOLON form -> paste into IntelliJ's *inline* Environment variables field (Active profiles: postgres)."
     echo "Using .env files instead? run \`just dev-env-files\` (writes one .env per service). Run dev-forward-all first."
     echo
     echo "=== catalog (SERVER_PORT 8083) ==="
-    echo "SERVER_PORT=8083;DB_HOST=localhost;DB_PORT=5432;DB_NAME=catalogdb;DB_USER=catalog;DB_PASS=$(pw catalog)"
+    echo "SERVER_PORT=8083;DB_HOST=localhost;DB_PORT=5432;DB_NAME=catalogdb;DB_USER=catalog;DB_PASS=$(pw catalog);$kc"
     echo
     echo "=== orders (SERVER_PORT 8080) ==="
-    echo "SERVER_PORT=8080;DB_HOST=localhost;DB_PORT=5433;DB_NAME=ordersdb;DB_USER=orders;DB_PASS=$(pw orders);KAFKA_BOOTSTRAP=localhost:9092;INVENTORY_BASE_URL=http://localhost:8081;PAYMENTS_BASE_URL=http://localhost:8082"
+    echo "SERVER_PORT=8080;DB_HOST=localhost;DB_PORT=5433;DB_NAME=ordersdb;DB_USER=orders;DB_PASS=$(pw orders);KAFKA_BOOTSTRAP=localhost:9092;INVENTORY_BASE_URL=http://localhost:8081;PAYMENTS_BASE_URL=http://localhost:8082;$kc"
     echo
     echo "=== inventory (SERVER_PORT 8081) ==="
-    echo "SERVER_PORT=8081;DB_HOST=localhost;DB_PORT=5434;DB_NAME=inventorydb;DB_USER=inventory;DB_PASS=$(pw inventory);KAFKA_BOOTSTRAP=localhost:9092"
+    echo "SERVER_PORT=8081;DB_HOST=localhost;DB_PORT=5434;DB_NAME=inventorydb;DB_USER=inventory;DB_PASS=$(pw inventory);KAFKA_BOOTSTRAP=localhost:9092;$kc"
     echo
     echo "=== payments (SERVER_PORT 8082) ==="
-    echo "SERVER_PORT=8082;DB_HOST=localhost;DB_PORT=5435;DB_NAME=paymentsdb;DB_USER=payments;DB_PASS=$(pw payments);KAFKA_BOOTSTRAP=localhost:9092"
+    echo "SERVER_PORT=8082;DB_HOST=localhost;DB_PORT=5435;DB_NAME=paymentsdb;DB_USER=payments;DB_PASS=$(pw payments);KAFKA_BOOTSTRAP=localhost:9092;$kc"
+    echo
+    echo "=== users (SERVER_PORT 8085) ==="
+    echo "SERVER_PORT=8085;DB_HOST=localhost;DB_PORT=5436;DB_NAME=usersdb;DB_USER=users;DB_PASS=$(pw users);$kc"
     echo
     echo "=== notifications (SERVER_PORT 8084, no DB) ==="
     echo "SERVER_PORT=8084;KAFKA_BOOTSTRAP=localhost:9092"
@@ -253,18 +284,23 @@ dev-env-files:
       : > "$f"; for kv in "$@"; do echo "$kv" >> "$f"; done
       echo "  wrote $f"
     }
-    emit catalog       SERVER_PORT=8083 DB_HOST=localhost DB_PORT=5432 DB_NAME=catalogdb   DB_USER=catalog   "DB_PASS=$(pw catalog)"
-    emit orders        SERVER_PORT=8080 DB_HOST=localhost DB_PORT=5433 DB_NAME=ordersdb    DB_USER=orders    "DB_PASS=$(pw orders)"    KAFKA_BOOTSTRAP=localhost:9092 INVENTORY_BASE_URL=http://localhost:8081 PAYMENTS_BASE_URL=http://localhost:8082
-    emit inventory     SERVER_PORT=8081 DB_HOST=localhost DB_PORT=5434 DB_NAME=inventorydb DB_USER=inventory "DB_PASS=$(pw inventory)" KAFKA_BOOTSTRAP=localhost:9092
-    emit payments      SERVER_PORT=8082 DB_HOST=localhost DB_PORT=5435 DB_NAME=paymentsdb  DB_USER=payments  "DB_PASS=$(pw payments)"  KAFKA_BOOTSTRAP=localhost:9092
+    # OIDC for the SECURED resource servers (see dev-env). JWKS comes from the :8180 Keycloak forward;
+    # the token's real issuer (https://auth.localhost) is matched via KEYCLOAK_ISSUER. notifications omits it.
+    KC_ISS="KEYCLOAK_ISSUER=https://auth.localhost/realms/eurotransit"
+    KC_JWK="KEYCLOAK_JWK_SET_URI=http://localhost:8180/realms/eurotransit/protocol/openid-connect/certs"
+    emit catalog       SERVER_PORT=8083 DB_HOST=localhost DB_PORT=5432 DB_NAME=catalogdb   DB_USER=catalog   "DB_PASS=$(pw catalog)"   "$KC_ISS" "$KC_JWK"
+    emit orders        SERVER_PORT=8080 DB_HOST=localhost DB_PORT=5433 DB_NAME=ordersdb    DB_USER=orders    "DB_PASS=$(pw orders)"    KAFKA_BOOTSTRAP=localhost:9092 INVENTORY_BASE_URL=http://localhost:8081 PAYMENTS_BASE_URL=http://localhost:8082 "$KC_ISS" "$KC_JWK"
+    emit inventory     SERVER_PORT=8081 DB_HOST=localhost DB_PORT=5434 DB_NAME=inventorydb DB_USER=inventory "DB_PASS=$(pw inventory)" KAFKA_BOOTSTRAP=localhost:9092 "$KC_ISS" "$KC_JWK"
+    emit payments      SERVER_PORT=8082 DB_HOST=localhost DB_PORT=5435 DB_NAME=paymentsdb  DB_USER=payments  "DB_PASS=$(pw payments)"  KAFKA_BOOTSTRAP=localhost:9092 "$KC_ISS" "$KC_JWK"
+    emit users         SERVER_PORT=8085 DB_HOST=localhost DB_PORT=5436 DB_NAME=usersdb     DB_USER=users     "DB_PASS=$(pw users)"     "$KC_ISS" "$KC_JWK"
     emit notifications SERVER_PORT=8084 KAFKA_BOOTSTRAP=localhost:9092
     echo ">> set Active profiles: postgres in each run config. These files are gitignored (.env)."
 
 # ── one-shot bootstrap ─────────────────────────────────────────────────────
 
-# full local bootstrap from scratch: cluster + registry + platform (Steps 1-3)
-bootstrap-kind: cluster-up registry-up traefik-install certmanager-install cnpg-install strimzi-install kafka-kind-apply
-    @echo ">> kind cluster + registry + platform ready."
+# full local bootstrap from scratch: cluster + registry + platform (Steps 1-3) + Keycloak operator
+bootstrap-kind: cluster-up registry-up traefik-install certmanager-install cnpg-install strimzi-install kafka-kind-apply keycloak-install
+    @echo ">> kind cluster + registry + platform + Keycloak operator ready."
     @echo ">> next:  just images-kind   &&   just app-deploy"
 
 # ── platform: next steps (add recipes as we install each) ───────────────────

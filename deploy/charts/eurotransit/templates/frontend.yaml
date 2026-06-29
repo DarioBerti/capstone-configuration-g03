@@ -1,0 +1,67 @@
+{{- /*
+Debug SPA (React/Vite) served by nginx, exposed in-cluster so the app can be exercised end-to-end
+without running the services locally. DEV/kind only: frontend.enabled is false in the base values
+(in prod the SPA is hosted/served elsewhere) and flipped on in values-kind.yaml.
+
+The bundle is static; API calls are same-origin /api/* and the ingress routes those prefixes to the
+backend services (see ingress.yaml, also gated on frontend.enabled). The Keycloak URL is baked into
+the image at build time (VITE_KEYCLOAK_URL), not read here.
+*/ -}}
+{{- if .Values.frontend.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    {{- include "eurotransit.labels" (dict "svc" "frontend" "root" $) | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "eurotransit.selectorLabels" (dict "svc" "frontend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "eurotransit.labels" (dict "svc" "frontend" "root" $) | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: frontend
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          ports:
+            - containerPort: 80
+          # static nginx: readiness + liveness just confirm it serves the entry page
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels:
+    {{- include "eurotransit.labels" (dict "svc" "frontend" "root" $) | nindent 4 }}
+spec:
+  selector:
+    {{- include "eurotransit.selectorLabels" (dict "svc" "frontend") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.frontend.port }}
+      targetPort: 80
+{{- end }}

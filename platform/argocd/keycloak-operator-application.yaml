@@ -1,0 +1,30 @@
+# Argo CD Application: the Keycloak Operator (CRDs + controller). It must reconcile BEFORE the eurotransit
+# app's Keycloak/KeycloakRealmImport resources — the sync-wave below runs it ahead of the default-wave
+# (0) app, and the eurotransit resources carry SkipDryRunOnMissingResource so they tolerate the CRDs not
+# yet existing on the very first sync, then converge.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keycloak-operator
+  namespace: argocd
+  annotations:
+    # negative wave = apply before the eurotransit application (wave 0)
+    argocd.argoproj.io/sync-wave: "-5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/DarioBerti/capstone-configuration-g03.git
+    targetRevision: main
+    path: platform/keycloak/operator
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: eurotransit
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

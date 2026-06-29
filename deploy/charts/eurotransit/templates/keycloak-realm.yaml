@@ -1,0 +1,143 @@
+{{- /*
+Declarative realm import: the operator creates/updates the `eurotransit` realm and its clients on the
+Keycloak instance above. Two clients:
+  - eurotransit-frontend : PUBLIC SPA client (Authorization Code + PKCE) used by the React frontend.
+  - orders-svc           : CONFIDENTIAL service client (client credentials) Orders uses to call its
+                           siblings off the Kafka thread. Its secret MUST equal the orders-oidc secret
+                           that Orders reads (keep them in sync; in prod both come from the same value).
+An audience mapper stamps `eurotransit-api` into tokens so resource servers can check the audience.
+
+WARNING: a realm import only seeds the realm; it does not continuously reconcile every field. Treat it
+as bootstrap. Do NOT commit a real orders-svc secret here — override keycloak.dev.ordersClientSecret via
+a private overlay in prod (see platform/keycloak/README.md).
+*/ -}}
+{{- if .Values.keycloak.enabled }}
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: eurotransit-realm
+  labels:
+    app.kubernetes.io/part-of: eurotransit
+    app.kubernetes.io/name: keycloak
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  keycloakCRName: keycloak
+  realm:
+    realm: eurotransit
+    enabled: true
+    roles:
+      realm:
+        - name: USER
+        - name: ADMIN
+    clientScopes:
+      - name: eurotransit-api
+        protocol: openid-connect
+        protocolMappers:
+          - name: eurotransit-audience
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: eurotransit-api
+              access.token.claim: "true"
+              id.token.claim: "false"
+          # A realm IMPORT that lists clientScopes does NOT create Keycloak's built-in scopes
+          # (basic/profile/email), so the `sub`, username, email and name claims they normally add are
+          # absent. We carry them here instead — the Users service keys profiles on `sub` and mirrors the
+          # rest (it NPEs on a token without `sub`). `sub` moved into the `basic` scope in Keycloak 26.
+          - name: sub
+            protocol: openid-connect
+            protocolMapper: oidc-sub-mapper
+            config:
+              access.token.claim: "true"
+              introspection.token.claim: "true"
+          - name: preferred_username
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            config:
+              user.attribute: username
+              claim.name: preferred_username
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+          - name: email
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            config:
+              user.attribute: email
+              claim.name: email
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+          - name: given_name
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            config:
+              user.attribute: firstName
+              claim.name: given_name
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+          - name: family_name
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-property-mapper
+            config:
+              user.attribute: lastName
+              claim.name: family_name
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "true"
+    clients:
+      - clientId: eurotransit-frontend
+        name: EuroTransit SPA
+        publicClient: true
+        standardFlowEnabled: true
+        # OFF in prod; kind enables it so test accounts can fetch a token via the password grant (curl)
+        directAccessGrantsEnabled: {{ .Values.keycloak.devDirectAccessGrants }}
+        redirectUris:
+          - https://{{ .Values.global.domain }}/*
+          {{- range .Values.keycloak.frontend.extraRedirectUris }}
+          - {{ . | quote }}
+          {{- end }}
+        webOrigins:
+          - https://{{ .Values.global.domain }}
+          {{- range .Values.keycloak.frontend.extraWebOrigins }}
+          - {{ . | quote }}
+          {{- end }}
+        # Only eurotransit-api exists in this imported realm (the import suppresses Keycloak's built-in
+        # scopes), and it now carries both the audience AND the identity claims (sub/username/email/name)
+        # the resource servers + Users service need — see the clientScopes block above.
+        defaultClientScopes:
+          - eurotransit-api
+        attributes:
+          pkce.code.challenge.method: S256
+      - clientId: {{ .Values.services.orders.oidcClient.clientId }}
+        name: Orders service account
+        publicClient: false
+        standardFlowEnabled: false
+        serviceAccountsEnabled: true
+        secret: {{ .Values.keycloak.dev.ordersClientSecret | quote }}
+        defaultClientScopes:
+          - eurotransit-api
+    {{- /* Pre-seeded test accounts (dev/kind only; empty in prod). Passwords are non-temporary so the
+           user logs straight in. Realm roles drive any future role-based checks (USER/ADMIN). */}}
+    {{- with .Values.keycloak.testUsers }}
+    users:
+      {{- range . }}
+      - username: {{ .username | quote }}
+        enabled: true
+        email: {{ .email | quote }}
+        emailVerified: true
+        firstName: {{ .firstName | quote }}
+        lastName: {{ .lastName | quote }}
+        credentials:
+          - type: password
+            value: {{ .password | quote }}
+            temporary: false
+        realmRoles:
+          {{- range .roles }}
+          - {{ . | quote }}
+          {{- end }}
+      {{- end }}
+    {{- end }}
+{{- end }}
