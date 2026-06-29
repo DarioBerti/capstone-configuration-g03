@@ -29,7 +29,7 @@ global:
 frontend:
   enabled: false
   image:
-    repository: lab02g03registry.azurecr.io/eurotransit/frontend
+    repository: labg03clusterregistry.azurecr.io/eurotransit/frontend
     tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 1
@@ -183,7 +183,7 @@ services:
 
   users:
     image:
-      repository: lab02g03registry.azurecr.io/eurotransit/users
+      repository: labg03clusterregistry.azurecr.io/eurotransit/users
       tag: latest
       pullPolicy: IfNotPresent
     replicaCount: 2
