@@ -14,6 +14,11 @@ global:
   clusterIssuer: letsencrypt-prod
   # Kafka bootstrap exposed by the Strimzi-managed cluster (platform namespace)
   kafkaBootstrap: eurotransit-kafka-bootstrap.kafka.svc:9092
+  # Where every service ships its OTLP traces: the OpenTelemetry Collector gateway (Service
+  # `otel-collector` in ns `observability`, platform-installed). Centralised here so a move of the
+  # collector's name/namespace is a one-line change instead of editing the Deployment template; kind
+  # can override it in values-kind.yaml. Services stay backend-agnostic (they only know "send OTLP here").
+  otlpEndpoint: http://otel-collector.observability.svc:4318/v1/traces
   # OIDC contract injected into every secured service (validates Keycloak JWTs). The `issuer` MUST equal
   # the `iss` claim Keycloak stamps on tokens (the public frontend URL); jwkSetUri/tokenUri point at the
   # same public realm. kind overrides these in values-kind.yaml.
@@ -282,3 +287,20 @@ databaseResources:
     memory: 256Mi
   limits:
     memory: 512Mi
+
+# Observability (Pillar D): what the kube-prometheus-stack should scrape and which SLO alerts to evaluate.
+# Rendered by templates/observability.yaml into one ServiceMonitor per service + the checkout-SLO
+# PrometheusRule. Turn the whole concern off with `enabled: false` — nothing is deleted, the CRs simply
+# stop rendering (and any already-applied ones are pruned by Argo). If this block is removed entirely the
+# template fails closed (renders nothing) rather than erroring, so it can never break the app deploy.
+observability:
+  enabled: true
+  # Label value the kube-prometheus-stack matches to ADOPT our ServiceMonitors/PrometheusRule (its
+  # serviceMonitorSelector/ruleSelector look for `release: <this>`). Must equal the Helm release name the
+  # stack was installed under. A non-matching value makes the CRs inert (safe), never broken.
+  prometheusRelease: kube-prometheus-stack
+  # Checkout success-rate SLO target (0.99 = 99%). Error budget = 1 - target, the burn-rate denominator.
+  # Kept as a STRING so it renders verbatim into the PromQL expressions (no float-formatting surprises).
+  checkoutSuccessTarget: "0.99"
+  # p99 objective in SECONDS for the synchronous POST /api/orders ack latency. String for the same reason.
+  checkoutAckP99Seconds: "0.3"
