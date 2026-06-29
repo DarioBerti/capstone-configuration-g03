@@ -54,6 +54,10 @@ spec:
               containerPort: {{ $svc.port }}
               protocol: TCP
           env:
+            # every pod runs the in-cluster Spring profile (cluster hardening: quiet SQL, hidden health
+            # details, ECS JSON logs) — applies to stateless services like notifications too, not just DB ones
+            - name: SPRING_PROFILES_ACTIVE
+              value: "cluster"
             # where to ship traces (OTLP); overrides the local default baked in the image
             - name: MANAGEMENT_OTLP_TRACING_ENDPOINT
               value: "http://otel-collector.observability.svc:4318/v1/traces"
@@ -87,9 +91,6 @@ spec:
                   key: client-secret
             {{- end }}
             {{- if $svc.db }}
-            # switch the app onto PostgreSQL (the postgres Spring profile)
-            - name: SPRING_PROFILES_ACTIVE
-              value: "postgres"
             {{- /* DB_* come from the `<db>-app` Secret that CloudNativePG generates itself -> credentials are never written into Git or this chart */}}
             - name: DB_HOST
               valueFrom:
