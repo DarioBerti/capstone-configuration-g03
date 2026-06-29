@@ -22,12 +22,13 @@ const VUS = Number(__ENV.VUS || '10');           // concurrent virtual users at 
 const DURATION = __ENV.DURATION || '5m';         // steady-state hold (ramp up/down added around it)
 const ORDERS_RATIO = Number(__ENV.ORDERS_RATIO || '0.3'); // share of iterations that POST an order vs browse
 
-// Order request body. PLACEHOLDER — the domain model is being reworked (productId String -> Trip/Journey
-// entities + UUIDs + a payer user), so the real OrderRequest DTO is a moving target. ALIGN THIS to the
-// current contract, or override at runtime without editing the file: -e ORDER_BODY='{"...":"..."}'.
-const ORDER_BODY = __ENV.ORDER_BODY || JSON.stringify({
-  items: [{ productId: 'demo-seat', quantity: 1 }],
-});
+// Order request body. The reworked contract (application `dev`) is PlaceOrderRequest(tripCode, qty): the
+// buyer identity comes from the JWT `sub` (NOT the body), and an optional `Idempotency-Key` header dedupes
+// retries. The trip code is a business key (e.g. FR9592-20260629). NB: the intake returns 202 even if no
+// seats exist for that trip (the async saga rejects later) — fine for intake-SLO load; seed real seats for
+// a full money-path success test. If you load-test the PRE-rework image (app main, before dev→main + a CI
+// image bump), override the body at runtime: -e ORDER_BODY='{...old contract...}'.
+const ORDER_BODY = __ENV.ORDER_BODY || JSON.stringify({ tripCode: 'FR9592-20260629', qty: 1 });
 
 // ---- custom metrics --------------------------------------------------------------------------------
 const shed429 = new Counter('orders_shed_429');        // controlled refusal — a FEATURE, reported, not failed

@@ -30,10 +30,14 @@ Knobs (all optional): `VUS` (steady users, default 10), `DURATION` (steady hold,
 `ORDERS_RATIO` (share of iterations that place an order vs browse, default 0.3),
 `ORDER_BODY` (override the request JSON without editing the file).
 
-## ⚠ Order payload is a moving target
-`ORDER_BODY` is a **placeholder**. The domain model is being reworked (productId String → Trip/Journey
-entities + UUIDs + a payer user), so the real `OrderRequest` DTO will differ. Align the body to the
-current contract (check the Orders controller in the application repo) or pass `-e ORDER_BODY='{...}'`.
+## ⚠ Order payload depends on the deployed image
+The default `ORDER_BODY` matches the **reworked** contract on application `dev`:
+`PlaceOrderRequest(tripCode, qty)` — the buyer identity comes from the JWT `sub` (not the body), and an
+optional `Idempotency-Key` header dedupes retries. **But the cluster currently runs the PRE-rework image**
+(app `main` @22ce722) until `dev → main` lands and CI bumps the image tags. If you load-test that older
+image, override the body to its contract: `-e ORDER_BODY='{...}'`. The intake returns 202 even for an
+unknown trip code (the async saga rejects later), so it is enough for intake-SLO load; seed real seats for
+a full money-path success run.
 
 ## How it ties to the rest of Phase 4
 - The k6 **thresholds** (`orders_intake_ms p99<300`, `orders_intake_errors rate<0.01`) are a client-side
