@@ -51,13 +51,28 @@ Continues Lab05. **Decisions pinned during design (team, 2026-06-10 — "Decisio
 3. **Grafana Tempo** — install via Helm (pin the version), point the OTel Collector's OTLP exporter at it, and add
    Tempo as a Grafana datasource so traces and metrics share one UI (exemplars).
 
-4. **Dashboards as code** — Grafana sidecar `ConfigMap`s (label `grafana_dashboard: "1"`): money-path overview,
-   per-service RED (`http_server_requests_*`), infra USE, **Kafka consumer lag**, CNPG. (Next sub-step.)
+4. **Dashboards as code** — `dashboards/` holds the dashboard JSON; `dashboards/kustomization.yaml` turns each
+   into a `ConfigMap` (label `grafana_dashboard: "1"`, folder `EuroTransit`) the Grafana sidecar auto-loads:
+   ```bash
+   kubectl kustomize platform/observability/dashboards/   # validate offline (renders the ConfigMaps)
+   kubectl apply -k   platform/observability/dashboards/   # install / update
+   ```
+   Delivered (backed by guaranteed Micrometer metrics, so no empty panels): **RED** (`eurotransit-red.json` —
+   per-service rate/5xx/p99 + the checkout intake success-ratio, ack p99 and 429 rate) and **Runtime / golden
+   signals** (`eurotransit-runtime.json` — heap, process CPU, live threads, GC pause). The datasource is a
+   template variable (not a hardcoded UID) so the dashboards are portable across installs.
 
 **Pin versions** of the stack / Tempo / OTel Collector in this file when installed (reproducibility).
 
-**Still to do:** OTel Collector + Tempo manifests/Helm values; the dashboard ConfigMaps; validate the SLO
-targets (99% / 300 ms / 5 s) against a k6 load-test baseline; wire Tempo as a Grafana datasource.
+**Still to do:**
+- **Kafka consumer-lag** dashboard (leading latency indicator) — needs a lag source: either the Strimzi
+  `kafka-exporter` (`kafka_consumergroup_lag`) enabled on the Kafka CR, or the apps' Micrometer Kafka binder
+  (`kafka_consumer_fetch_manager_records_lag`). Add the dashboard once one of those metrics is confirmed scraped.
+- **CNPG** dashboard — needs the CloudNativePG `PodMonitor`/metrics enabled (`cnpg_*` series). Add once present.
+- Validate the SLO targets (99% / 300 ms) against a **k6** load-test baseline.
+- Wire **Tempo** as a Grafana datasource (so exemplars jump metric → trace).
+- **Live adoption check** (cluster on): Prometheus → Targets shows the 6 services UP, → Rules shows the SLO
+  group, and the two dashboards appear in the EuroTransit folder.
 
 ## Follow-ups to apply AFTER the backend-rework / keycloak branch merges into main
 These are deliberate temporary shortcuts taken ONLY to avoid a merge conflict with the keycloak branch (which
