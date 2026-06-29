@@ -345,6 +345,21 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   left as a documented finding for the team to resolve in `deploy/charts/eurotransit` + `docs/design.md`, not
   silently changed by the agent.
 
+## 17. Phase 4 — agent almost overwrote a teammate's existing `chaos-mesh/README.md`
+
+- **What the agent did:** while adding the five Chaos Mesh manifests it went to **write** a fresh
+  `platform/chaos-mesh/README.md`, assuming the directory was new — but the folder already existed with a
+  teammate's "Planned experiments" stub (scaffolding committed earlier on `main`).
+- **Why wrong:** a blind `Write` would have **silently destroyed** the existing stub (and any intent in it),
+  the classic agent failure of treating a path as empty without checking. On a shared repo that is lost work.
+- **How caught:** the write-after-read guard refused (`File has not been read yet`). The agent then **read** the
+  stub, saw it listed the same five experiments as "planned", and **edited** it into the delivered version
+  (numeric-prefixed filenames matching `docs/chaos/0X`, safety model, run loop) instead of clobbering it.
+- **Lesson:** before writing a file in a multi-person repo, assume it may already exist — read first; turn an
+  overwrite into a merge/upgrade of what is there. (Also: the SLO targets were kept as **strings** in
+  `values.yaml`, e.g. `"0.99"`, so they render verbatim into the PromQL expressions — floats risked a
+  formatting surprise in the rule text.)
+
 ---
 
 _Add new entries as they happen. Aim well past the required three; every caught mistake is
