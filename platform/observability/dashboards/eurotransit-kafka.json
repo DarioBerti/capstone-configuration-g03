@@ -1,0 +1,103 @@
+{
+  "uid": "eurotransit-kafka",
+  "title": "EuroTransit — Kafka consumer lag",
+  "tags": ["eurotransit", "kafka", "lag"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "datasource",
+        "label": "Data source",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "options": []
+      },
+      {
+        "type": "query",
+        "name": "consumergroup",
+        "label": "Consumer group",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(kafka_consumergroup_lag, consumergroup)",
+        "definition": "label_values(kafka_consumergroup_lag, consumergroup)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" },
+        "options": [],
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Prerequisite",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Empty panels?** This dashboard needs a consumer-lag source. Either enable the Strimzi **kafka-exporter** on the Kafka CR (exposes `kafka_consumergroup_lag`) and scrape it, or enable the apps' **Micrometer Kafka binder** (`kafka_consumer_fetch_manager_records_lag`, already scraped via our ServiceMonitors). Consumer lag is the leading indicator of pipeline latency — it rises before user-visible delay."
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Consumer lag (records) by group — kafka-exporter",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (consumergroup) (kafka_consumergroup_lag{consumergroup=~\"$consumergroup\"})",
+          "legendFormat": "{{consumergroup}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Consumer lag (records) by topic — kafka-exporter",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum by (topic) (kafka_consumergroup_lag)",
+          "legendFormat": "{{topic}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Consumer lag (records) — Micrometer binder (alt source)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "max by (job, topic) (kafka_consumer_fetch_manager_records_lag)",
+          "legendFormat": "{{job}} / {{topic}}"
+        }
+      ]
+    }
+  ]
+}

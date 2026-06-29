@@ -65,14 +65,17 @@ Continues Lab05. **Decisions pinned during design (team, 2026-06-10 — "Decisio
 **Pin versions** of the stack / Tempo / OTel Collector in this file when installed (reproducibility).
 
 **Still to do:**
-- **Kafka consumer-lag** dashboard (leading latency indicator) — needs a lag source: either the Strimzi
-  `kafka-exporter` (`kafka_consumergroup_lag`) enabled on the Kafka CR, or the apps' Micrometer Kafka binder
-  (`kafka_consumer_fetch_manager_records_lag`). Add the dashboard once one of those metrics is confirmed scraped.
-- **CNPG** dashboard — needs the CloudNativePG `PodMonitor`/metrics enabled (`cnpg_*` series). Add once present.
-- Validate the SLO targets (99% / 300 ms) against a **k6** load-test baseline.
+- **Kafka consumer-lag** + **CNPG** dashboards already SHIP as `dashboards/eurotransit-kafka.json` and
+  `dashboards/eurotransit-cnpg.json` (each with a "prerequisite" note panel), but are **commented out** in
+  `dashboards/kustomization.yaml` so we never publish empty-looking panels. Enable them by (a) turning the
+  metric source on — Strimzi `kafka-exporter` (`kafka_consumergroup_lag`) or the Micrometer Kafka binder
+  (`kafka_consumer_fetch_manager_records_lag`); CNPG `spec.monitoring.enablePodMonitor: true` (`cnpg_*`) — then
+  (b) uncommenting the two generators and re-running `kubectl apply -k`.
+- Generate steady load with the **k6** money-path script (`platform/k6/money-path.js`) and validate the SLO
+  targets (99% / 300 ms) against that baseline.
 - Wire **Tempo** as a Grafana datasource (so exemplars jump metric → trace).
 - **Live adoption check** (cluster on): Prometheus → Targets shows the 6 services UP, → Rules shows the SLO
-  group, and the two dashboards appear in the EuroTransit folder.
+  group, and the dashboards appear in the EuroTransit folder.
 
 ## Follow-ups to apply AFTER the backend-rework / keycloak branch merges into main
 These are deliberate temporary shortcuts taken ONLY to avoid a merge conflict with the keycloak branch (which
