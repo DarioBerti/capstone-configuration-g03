@@ -14,9 +14,13 @@ ingressClass:
   isDefaultClass: true
   name: traefik
 
-# Watch standard networking.k8s.io/v1 Ingress objects (what the app chart emits).
+# Watch standard networking.k8s.io/v1 Ingress objects (what the app chart emits for catalog/users/etc.)
+# AND Traefik's own CRDs (IngressRoute / TraefikService), needed for the Fase-5 weighted canary on /api/orders.
+# The Traefik chart installs the CRDs by default; this just turns the provider on.
 providers:
   kubernetesIngress:
+    enabled: true
+  kubernetesCRD:
     enabled: true
 
 # Permanently redirect plain HTTP to HTTPS on the web entrypoint (deep-merges with the per-env hostPort

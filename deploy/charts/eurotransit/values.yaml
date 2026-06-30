@@ -140,6 +140,24 @@ services:
       minReplicas: 2
       maxReplicas: 4
       targetCPUUtilizationPercentage: 70
+    # Fase 5 — weighted canary on the money path. Default OFF (base render unchanged: standard Ingress route).
+    # enabled=true -> a second `orders-canary` Deployment+Service runs `tag`, and a Traefik IngressRoute +
+    # weighted TraefikService route `weight`% of /api/orders to it (rest to stable). Promote 5->50->100 by
+    # editing `weight` and committing while watching the checkout SLOs; rollback = weight 0 (or enabled:false).
+    # (Blue/green is the same mechanism at weights 100/0 between two colour tracks — follow-up.)
+    canary:
+      enabled: false
+      tag: 22ce722        # the canary build's image tag to trial (a new commit SHA)
+      weight: 5           # percent of /api/orders traffic sent to the canary
+      replicaCount: 1     # fixed small exposure — the canary is controlled traffic, not an autoscaled tier
+    # Fase 5 — blue/green (ALTERNATIVE to canary; mutually exclusive — the chart fails the render if both are on,
+    # since both own the /api/orders route). blue = the stable `orders`; green = a second `orders-green` running
+    # `greenTag` at full capacity. Release = flip `active` blue->green (atomic 100% cutover); rollback = flip back.
+    # While active=blue, green runs but gets 0 public traffic, so you can smoke-test it internally first.
+    bluegreen:
+      enabled: false
+      greenTag: 22ce722   # the candidate (green) image tag
+      active: blue        # blue | green  -> which colour serves /api/orders at 100%
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
