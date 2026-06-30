@@ -312,6 +312,8 @@ infra dalle dashboard native di kube-prometheus; Kafka-lag e CNPG pronte ma gate
 
 ## TODO / aperti a valle della Fase 4
 - **Tracing live** → fix trace-export Boot 4, lato backend su `dev` (Riccardo). Traccia + screenshot lì (utile demo Fase 6).
-- **Capacità AKS**: 3× B2s_v2 (6 vCPU) saturi di CPU-*requests* con observability completa → su cluster non stanno
-  insieme HA al completo + tracing/chaos; si gira su kind o si alza temporaneamente il node pool.
+- **Capacità AKS** — ✅ **RISOLTO (PR #9, 30/06, verificato live):** con l'observability completa la somma delle CPU
+  *requests* superava l'allocatable (~5.4 vCPU su 3× B2s_v2) e gli standby CNPG restavano `Pending: Insufficient cpu`.
+  Fix di **booking**: `requests cpu 100m → 50m` su `resources` + `databaseResources` (uso reale ~50%, nessun CPU limit
+  → niente throttling). Su AKS tutti gli 8 instance CNPG vanno Running → observability **e** HA coesistono.
 - **Chaos engineering** (5 esperimenti) = **Fase 6**, non 4.
