@@ -9,6 +9,12 @@ deployment:
   # only the control-plane node is eligible (single ingress-ready node) -> one replica
   replicas: 1
 
+# hostPort binds 80/443 on that single node, so the chart's default RollingUpdate (maxSurge=1) deadlocks on
+# upgrade: the new pod can't bind the ports while the old pod still holds them. Recreate kills the old pod first.
+updateStrategy:
+  type: Recreate
+  rollingUpdate: null
+
 # (1) pin Traefik to the control-plane node where kind maps host 80/443
 nodeSelector:
   ingress-ready: "true"

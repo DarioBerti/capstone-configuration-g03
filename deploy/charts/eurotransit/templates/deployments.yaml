@@ -54,6 +54,16 @@ spec:
               containerPort: {{ $svc.port }}
               protocol: TCP
           env:
+            # Pod identity via the downward API, surfaced into the ECS logs as `service.node.name`
+            # (Boot maps LOGGING_STRUCTURED_ECS_SERVICE_NODE_NAME -> logging.structured.ecs.service.node-name).
+            # Makes "which replica produced this line" a queryable field, not just the live stream's source.
+            # POD_NAME must be declared before the var that references it via $(POD_NAME).
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: LOGGING_STRUCTURED_ECS_SERVICE_NODE_NAME
+              value: $(POD_NAME)
             # every pod runs the in-cluster Spring profile (cluster hardening: quiet SQL, hidden health
             # details, ECS JSON logs) — applies to stateless services like notifications too, not just DB ones
             - name: SPRING_PROFILES_ACTIVE
