@@ -210,15 +210,38 @@ kafka-forward local_port="9092":
 #            ...debug in IntelliJ...
 #            just dev-up     (redeploy the pods into the cluster when you're done)
 
-# scale the 6 app Deployments to 0 (DB + Kafka keep running) so local JVMs own the work
+# Scoped by the part-of label (not `--all`, which also took down platform operators like the Keycloak operator).
+# Scale the eurotransit app services to 0 so local JVMs own the work (DB + Kafka stay up).
 dev-down:
-    kubectl --context {{ctx}} -n eurotransit scale deploy --all --replicas=0
+    kubectl --context {{ctx}} -n eurotransit scale deploy -l app.kubernetes.io/part-of=eurotransit --replicas=0
     @echo ">> app pods scaled to 0. CNPG databases + Kafka still running."
     @echo ">> next: just dev-forward-all   (new tab)   then   just dev-env"
 
-# restore the app pods in-cluster (helm reconciles each service back to its declared replicas)
+# app-deploy (helm) restores fixed-replica services, but HPA-managed Deployments omit `replicas`, so helm leaves
+# them at 0 after dev-down and the HPA can't recover from zero ("scaling disabled since replica count is zero").
+# Restore the app pods in-cluster after dev-down (incl. re-floating the HPA-managed services off zero to their floor).
 dev-up: app-deploy
-    @echo ">> app pods restored in-cluster."
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for h in $(kubectl --context {{ctx}} -n eurotransit get hpa -o jsonpath='{.items[*].metadata.name}'); do
+      min=$(kubectl --context {{ctx}} -n eurotransit get hpa "$h" -o jsonpath='{.spec.minReplicas}')
+      kubectl --context {{ctx}} -n eurotransit scale deploy "$h" --replicas="$min"
+    done
+    echo ">> app pods restored in-cluster (HPA targets nudged off zero to their floor)."
+
+# A helm upgrade is a no-op when the tag is unchanged (:dev), so restart the Deployments explicitly;
+# pullPolicy=Always (values-kind) makes each new pod re-pull the rebuilt image.
+# Roll the in-cluster app pods to pick up freshly pushed :dev images (run after `just images-kind`); waits for Ready.
+dev-restart:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for s in {{services}} frontend; do
+      kubectl --context {{ctx}} -n eurotransit rollout restart deploy "$s"
+    done
+    for s in {{services}} frontend; do
+      kubectl --context {{ctx}} -n eurotransit rollout status deploy "$s" --timeout=120s
+    done
+    echo ">> all app pods rolled to the latest :dev images and Ready."
 
 # background a port-forward for every DB (distinct local ports) + Kafka + Keycloak; Ctrl-C stops them all
 dev-forward-all:

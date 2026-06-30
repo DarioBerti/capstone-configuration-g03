@@ -18,3 +18,17 @@ ingressClass:
 providers:
   kubernetesIngress:
     enabled: true
+
+# Permanently redirect plain HTTP to HTTPS on the web entrypoint (deep-merges with the per-env hostPort
+# bindings in the overlays). Without this the SPA can load over http://<host>, and keycloak-js then derives an
+# http:// redirect_uri from the page origin — which is NOT a registered Keycloak redirect URI (only
+# https://<host>/* is), so Keycloak rejects /auth with 400. Forcing https keeps the origin (and redirect_uri)
+# on the registered scheme.
+ports:
+  web:
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
