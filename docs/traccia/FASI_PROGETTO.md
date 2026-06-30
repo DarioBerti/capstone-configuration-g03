@@ -87,7 +87,7 @@ Dashboard e SLO che **guidano decisioni** (Pilastro D, continua dal Lab05).
 - ✅ **kube-prometheus-stack** adotta le nostre CR: **6 ServiceMonitor → 17 target** scrapati (catalog/inventory/payments/notifications/orders UP; `users` DOWN = immagine `:latest` mai buildata; 1 pod `orders` DOWN = config-error — roba backend, non observability).
 - ✅ **SLO**: `PrometheusRule eurotransit-checkout-slo` caricata e **`health=ok`** — 4 recording (error-ratio 5m/30m/1h/6h) + 3 **alert symptom-based** (burn-rate fast/slow + ack-latency), mai sulla CPU. SLI come da `docs/slo.md`.
 - ✅ **Dashboard as-code** caricate dalla sidecar Grafana: **RED** per servizio + **Runtime/golden-signals** (JVM heap/CPU/thread/GC, dati live). I pannelli "checkout intake" sono vuoti finché `orders` non serve traffico `/api/orders` (atteso). **USE infra** = dashboard native di kube-prometheus.
-- 🔄 **Tracing distribuito (OTel Collector + Tempo)**: pipeline **montata e provata su kind** (Collector + Tempo + Grafana healthy). **MA le app non esportano span** pur avendo dipendenze+config corrette (le metriche Prometheus vanno) → **TODO Riccardo: fix del wiring trace-export su Spring Boot 4, su `dev`** (l'ha già fatto in webapp2, deve adattarlo al cluster). La traccia live si cattura lì. Su AKS comunque non ci sta insieme all'HA per saturazione CPU-requests.
+- 🔄 **Tracing distribuito (OTel Collector + Tempo)**: pipeline **montata e provata su kind** (Collector + Tempo + Grafana healthy). **MA le app non esportano span** pur avendo dipendenze+config corrette (le metriche Prometheus vanno) → **TODO Riccardo: fix del wiring trace-export su Spring Boot 4, su `dev`** (l'ha già fatto in webapp2, deve adattarlo al cluster). La traccia live si cattura lì. (La saturazione CPU che bloccava l'HA è stata **risolta** — vedi finding sotto, PR #9 — quindi il blocco del tracing è ora solo lato app, non di capacità.)
 - ⬜ (rifinitura) dashboard **Kafka consumer-lag** + **CNPG** pronte ma gated finché non si abilitano gli exporter (kafka-exporter / CNPG PodMonitor).
 
 > **FINDING capacità — risponde al dubbio "3 nodi non bastano più? strano" (Dario, 2026-06-29).**
@@ -100,8 +100,15 @@ Dashboard e SLO che **guidano decisioni** (Pilastro D, continua dal Lab05).
 > previsto, di mettere l'osservabilità su un cluster già pieno. **Opzioni (decisione team):** (a) abbassare
 > requests/repliche non critiche (es. `inventory-db` 3→2, requests più basse), oppure (b) alzare il node pool
 > (più costo — evitato per ora, credito ~63€). Conseguenza pratica: su questo cluster ci stanno **o** gli standby
-> HA al completo **o** lo stack observability + tracing/chaos, non tutto insieme al massimo. Cluster **fermato**
-> (`az aks stop`) a fine sessione per non spendere; tracing e chaos si fanno su **kind** o quando si libera spazio.
+> HA al completo **o** lo stack observability — *quando le request erano a 100m*.
+>
+> ✅ **RISOLTO + VERIFICATO LIVE (30/06/2026, PR #9 di Dario).** Scelta (a): CPU *requests* abbassate **`100m → 50m`**
+> su `resources` (servizi) e `databaseResources` (istanze CNPG). È un fix di **booking**, non di capacità (uso reale
+> ~50%, nessun CPU limit → niente throttling), mirato ai DB (no HPA → nessun effetto autoscaling). Su AKS: Argo ha
+> riconciliato i 50m e **tutti gli 8 instance CNPG vanno Running**, inclusi i prima-bloccati `orders-db-2`,
+> `inventory-db-2`, `inventory-db-3` → **niente più `Pending: Insufficient cpu`**. Observability completa + HA CNPG ora
+> **coesistono** sui 3× B2s_v2. (Restano non-Running solo `orders` = secret `orders-oidc` e `users` = immagine: problemi
+> backend, non-CPU.) Cluster rifermato subito dopo il test (~15 min uptime).
 
 ## Fase 5 — Progressive delivery ⬜
 
