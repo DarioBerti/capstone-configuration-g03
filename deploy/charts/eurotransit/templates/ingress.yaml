@@ -34,7 +34,7 @@ spec:
                 name: catalog
                 port:
                   number: {{ .Values.services.catalog.port }}
-          {{- if not (dig "enabled" false (.Values.services.orders.canary | default dict)) }}
+          {{- if not (or (dig "enabled" false (.Values.services.orders.canary | default dict)) (dig "enabled" false (.Values.services.orders.bluegreen | default dict))) }}
           # /api/orders/** -> the Orders service (public money-path entry)
           - path: /api/orders
             pathType: Prefix
@@ -44,8 +44,9 @@ spec:
                 port:
                   number: {{ .Values.services.orders.port }}
           {{- else }}
-          # /api/orders is owned by the Traefik IngressRoute + weighted TraefikService (Fase 5 canary):
-          # see templates/ingressroute-orders.yaml. Kept out of this Ingress to avoid a duplicate route.
+          # /api/orders is owned by a Traefik IngressRoute (Fase 5 progressive delivery): the weighted
+          # TraefikService (canary, ingressroute-orders.yaml) or the 100%-to-active-colour route (blue/green,
+          # bluegreen.yaml). Kept out of this Ingress to avoid a duplicate route.
           {{- end }}
           # /api/users/** -> the Users service (self-service profile; the SPA calls it with the user token)
           - path: /api/users

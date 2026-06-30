@@ -22,7 +22,7 @@ Legenda stato: ✅ fatto · 🔄 in corso · 🔜 prossima · ⬜ da fare
  Fase 2  Resilienza            ✅   ← CB/bulkhead/retry/429/void + test; §6 validato LIVE + §7-codice (28/06/2026)
  Fase 3  Piattaforma su cluster ✅   ← verificata sul cluster reale (2026-06-28): Argo Synced&Healthy, sync CNPG, money-path CONFIRMED
  Fase 4  Observability         🔄   ← core (metriche+SLO+alert+dashboard) ✅ validato LIVE 2026-06-29; resta TRACING (deferito a kind)
- Fase 5  Progressive delivery  🔄   ← canary (Traefik TraefikService) implementato + helm-validato; resta blue/green + prova live
+ Fase 5  Progressive delivery  🔄   ← canary + blue/green implementati + helm-validati (FASE5_DELIVERY.md); resta la prova live
  Fase 6  Chaos + postmortem    ⬜   ← i 5 esperimenti chaos stanno QUI, non in Fase 4
 ```
 
@@ -121,7 +121,10 @@ Due strategie, entrambe dimostrate (Pilastro D).
   standard che molla `/api/orders` quando il canary è attivo, e `providers.kubernetesCRD` abilitato in Traefik.
   Promozione **GitOps-native**: si edita `canary.weight` e si committa, guardando le SLO; rollback = weight 0. **Resta**
   la prova live sul cluster (deploy di un tag canary + osservare lo split).
-- ⬜ **Blue/green** (due colour-track + switch 100/0 del routing, rollback istantaneo) — stesso meccanismo, follow-up.
+- 🔄 **Blue/green** (blue = stable `orders`, green = `orders-green` a piena capacità; IngressRoute 100% al colore
+  `active`; switch atomico + rollback istantaneo) — **implementato** (`templates/bluegreen.yaml`, mutuamente
+  esclusivo col canary: il chart fa `fail` se entrambi on). helm-validato. **Resta** la prova live.
+  Spiegazione completa (snippet + rationale) in `docs/traccia/FASE5_DELIVERY.md`.
 - ⬜ Discutere perché all-at-once e rolling **non** si usano sul percorso critico (no controllo dell'esposizione /
   no osservazione prima di promuovere) → vedi `RECAP_FASI`/design.
 - ℹ️ Decisione **D9**: scelto `TraefikService` (peso in Git, promozione umana sulle SLI), non Argo Rollouts
