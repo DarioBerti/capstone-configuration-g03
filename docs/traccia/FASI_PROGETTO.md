@@ -22,7 +22,7 @@ Legenda stato: ✅ fatto · 🔄 in corso · 🔜 prossima · ⬜ da fare
  Fase 2  Resilienza            ✅   ← CB/bulkhead/retry/429/void + test; §6 validato LIVE + §7-codice (28/06/2026)
  Fase 3  Piattaforma su cluster ✅   ← verificata sul cluster reale (2026-06-28): Argo Synced&Healthy, sync CNPG, money-path CONFIRMED
  Fase 4  Observability         🔄   ← core (metriche+SLO+alert+dashboard) ✅ validato LIVE 2026-06-29; resta TRACING (deferito a kind)
- Fase 5  Progressive delivery  🔄   ← canary + blue/green implementati + helm-validati (FASE5_DELIVERY.md); resta la prova live
+ Fase 5  Progressive delivery  ✅   ← canary + blue/green implementati + VALIDATI LIVE su kind (canary 12/24=50/50, blue/green ~100% al colore attivo); doc FASE5_DELIVERY.md
  Fase 6  Chaos + postmortem    ⬜   ← i 5 esperimenti chaos stanno QUI, non in Fase 4
 ```
 
@@ -110,9 +110,15 @@ Dashboard e SLO che **guidano decisioni** (Pilastro D, continua dal Lab05).
 > **coesistono** sui 3× B2s_v2. (Restano non-Running solo `orders` = secret `orders-oidc` e `users` = immagine: problemi
 > backend, non-CPU.) Cluster rifermato subito dopo il test (~15 min uptime).
 
-## Fase 5 — Progressive delivery 🔄 (canary implementato + helm-validato)
+## Fase 5 — Progressive delivery ✅ (canary + blue/green — implementati + validati LIVE su kind)
 
 Due strategie, entrambe dimostrate (Pilastro D).
+
+> **Validazione LIVE (kind, 2026-06-30):** abilitato Traefik `providers.kubernetesCRD` + upgrade del chart →
+> create `IngressRoute`/`TraefikService` e adottate da Traefik. **Canary** weight=50: su 24 POST `/api/orders`
+> attraverso l'ingress → `orders-canary`=12, stable=12 (6+6 sui 2 pod) = split 50/50. **Blue/green** active=green:
+> la IngressRoute è passata a `orders-green` e 11/12 richieste hanno colpito green (≈100% al colore attivo).
+> Cluster kind poi fermato. (Su AKS il meccanismo è identico — stesso chart; lì orders ha i problemi backend noti.)
 
 - 🔄 **Canary** via Traefik `TraefikService` (pesi 95/5 → 50/50 → 0/100 osservando le SLI) — **implementato nel chart**
   (helm lint/template ok): refactor del workload in `templates/_workload.tpl` (stable+canary da UNA definizione, niente
