@@ -1,0 +1,26 @@
+{{- /*
+CANARY track (Fase 5 — progressive delivery on the money path).
+
+When `services.orders.canary.enabled` is true, render a SECOND Orders workload named `orders-canary`,
+running the canary image tag, from the SAME reusable template as the stable one (templates/_workload.tpl).
+It gets its own Service `orders-canary` (distinct app.kubernetes.io/name) so the weighted TraefikService
+(ingressroute-orders.yaml) can split /api/orders traffic between `orders` (stable) and `orders-canary`.
+
+The canary shares the stable config: SAME database (orders-db), SAME OIDC client/secret, SAME env — it is
+the same app, just a new build. Fixed small replica count (no HPA: a canary is a controlled exposure, not
+an autoscaled tier). Promotion 5 -> 50 -> 100 is done by editing `canary.weight` in values.yaml (a commit),
+watching the Fase-4 SLIs; rollback = set the weight to 0 (or canary.enabled=false). GitOps-native canary.
+
+Gated + default-off, so the base render is unchanged when Fase 5 is not active.
+*/ -}}
+{{- $orders := .Values.services.orders }}
+{{- $canary := $orders.canary | default dict }}
+{{- if $canary.enabled }}
+---
+{{ include "eurotransit.serviceWorkload" (dict
+     "root" $
+     "name" "orders-canary"
+     "svc" $orders
+     "tag" $canary.tag
+     "replicas" (dig "replicaCount" 1 $canary)) }}
+{{- end }}
