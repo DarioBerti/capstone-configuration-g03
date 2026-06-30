@@ -275,15 +275,24 @@ databases:
 resources:
   # guaranteed share the scheduler reserves
   requests:
-    cpu: 100m
+    cpu: 50m
     memory: 256Mi
   # hard ceiling (memory only -> a CPU limit would throttle latency-sensitive spikes)
   limits:
     memory: 512Mi
-# Resources for every PostgreSQL instance (applied to all Cluster CRs)
+# Resources for every PostgreSQL instance (applied to all Cluster CRs).
+# cpu request lowered 100m -> 50m. After Fase 4 the kube-prometheus-stack's
+# reservations pushed the SUM of CPU requests past node allocatable (~5.4 vCPU on 3x B2s_v2),
+# leaving the CNPG standbys (orders-db-2 and inventory-db-2, just because those were the last)
+# stuck Pending: Insufficient cpu.
+# This is a SCHEDULER-BOOKING fix, not a capacity one: real CPU use is ~50% and there is no
+# CPU limit, we only shrink the reservation so the standbys fit.
+# Targeted at the DBs on purpose: they have no HPA, so unlike the app services lowering the
+# request has no autoscaling side-effect. 
+# Quota is capped at 6 vCPU (no 4th node possible), so we book less rather than buy more.
 databaseResources:
   requests:
-    cpu: 100m
+    cpu: 50m
     memory: 256Mi
   limits:
     memory: 512Mi
