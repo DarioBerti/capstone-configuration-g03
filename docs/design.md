@@ -78,9 +78,11 @@ is needed *now*.
    Payments dedup by key with persisted result. **Dedup-insert and decrement in one transaction.**
 7. **Resilience4j — circuit breaker (Phase 2 #1, IMPLEMENTED 2026-06-25).** Orders→Payments is wrapped in a
    circuit breaker applied **programmatically** through the injected `CircuitBreakerRegistry`
-   (`HttpPaymentsGateway`), **not** the `@CircuitBreaker` annotation: the `-spring-boot3` starter's AOP aspect
-   is not guaranteed to weave on Boot 4 (agent-log #2), whereas the registry bean is verified to bind, so
-   decorating through it is deterministic (proven end-to-end by `PaymentsGatewayBreakerIntegrationTest`).
+   (`HttpPaymentsGateway`), **not** the `@CircuitBreaker` annotation. Annotations now weave on Boot 4
+   (resilience4j 2.4.0 / `resilience4j-spring-boot4`, agent-log #2), so the registry is a **deliberate
+   design choice, not a compatibility workaround**: the gateway composes `Retry(CircuitBreaker(Bulkhead(…)))`
+   in one explicit, reviewable order, the decoration is immune to AOP self-invocation gaps, and it is
+   deterministically testable without a proxied context (proven end-to-end by `PaymentsGatewayBreakerIntegrationTest`).
    Policy (`instances.payments`): COUNT window 10, min 5 calls, **open at >50% failures OR >50% slow calls
    (slow = >2s)** — the prof's two open criteria (deck 11 s.17); wait-open 10s, 2 half-open probes, auto-transition.
    `ignore-exceptions: HttpClientErrorException` so a 4xx never trips the breaker; a 4xx is instead mapped to a
@@ -123,8 +125,11 @@ is needed *now*.
    **Resilience4j — backpressure / load shedding (Phase 2 #3, IMPLEMENTED 2026-06-26).** The synchronous intake
    `POST /api/orders` is rate-limited: over budget it is refused immediately with **HTTP 429 + `Retry-After`**
    instead of being queued ("backpressure is controlled refusal"; "queues just delay the failure", deck 11 s.24/7).
-   Applied **programmatically** via `RateLimiterRegistry` in a dedicated edge component `OrdersIntakeRateLimiter`
-   (`withPermit{}`) — same Boot-4 rationale as #1/#2 (no `@RateLimiter` AOP). `instances.orders-intake`:
+   Applied via the **`@RateLimiter(name="orders-intake")` annotation** on `OrdersController.place()` (resilience4j
+   2.4.0 / `resilience4j-spring-boot4` + `spring-boot-starter-aop`): over budget the aspect throws
+   `RequestNotPermitted` **before** the handler body runs (DB/outbox untouched), and `GlobalExceptionHandler`
+   maps it to 429 + `Retry-After` and counts the shed. Unlike the gateway (#1/#2), there is no composition to
+   order and no self-invocation path, so the annotation is the simpler fit here. `instances.orders-intake`:
    `limit-for-period 20`, `limit-refresh-period PT1S`, `timeout-duration PT0S` (never queue — shed at once). The
    `Retry-After` value is **derived from the limiter window** (not a magic number). Health indicator disabled
    (`management.health.ratelimiters.enabled: false`) like the breaker — shedding is the system *working*, it must

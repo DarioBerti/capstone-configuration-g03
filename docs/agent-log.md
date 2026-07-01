@@ -44,6 +44,17 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   end-to-end against an unreachable Payments). To eliminate the residual AOP risk entirely we apply
   the breaker **programmatically** via the registry rather than the `@CircuitBreaker` annotation
   (see design.md decision 7).
+- **Update (2026-06-30): the AOP risk is closed at the source.** Resilience4j **2.4.0** shipped a
+  dedicated **`resilience4j-spring-boot4`** artifact (depends on Spring Boot 4.0.0 / Spring Framework
+  7.0.2 — verified on Maven Central), so the annotation aspects are officially supported on our Boot
+  4.0.3. We bumped **`orders`** to it and added `spring-boot-starter-aop`, then migrated the intake
+  rate limiter from the programmatic `OrdersIntakeRateLimiter` to the **`@RateLimiter` annotation** on
+  `OrdersController.place()`. `OrdersIntakeRateLimiterTest` drives the proxied controller directly and
+  proves the aspect actually fires on Boot 4 (2nd call → `RequestNotPermitted` → 429 + Retry-After) —
+  a build-breaking proof, not a silent no-op. The gateway breaker/bulkhead/retry stay programmatic by
+  **choice** now (explicit `Retry(CircuitBreaker(Bulkhead(…)))` composition, self-invocation safety,
+  deterministic testability), not because annotations can't weave. `payments` still pins
+  `resilience4j-spring-boot3:2.3.0` (programmatic-only, so it works); an optional consistency bump.
 
 ## 3. (Reserved) readiness vs liveness probe scoping
 

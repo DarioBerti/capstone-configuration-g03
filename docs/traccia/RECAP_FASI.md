@@ -18,8 +18,10 @@ a 2 repo: `application` (codice) + `configuration` (stato desiderato, riconcilia
    (rifiuto controllato), quindi **non** devono mai influenzare readiness/health.
 3. **GitOps come unica verità**: nessuno tocca il cluster a mano; si cambia Git e Argo allinea.
 4. **Osservabilità sui sintomi**: si misura/allarma su ciò che vede l'utente (SLO), non sulle risorse.
-5. **Resilience4j applicato programmaticamente** (registry, non annotazioni) perché su Boot 4 l'aspect AOP non è
-   garantito agganciarsi (vedi `agent-log` #2).
+5. **Resilience4j**: il gateway (breaker/bulkhead/retry) è decorato **programmaticamente** via registry — scelta
+   deliberata per ordinare la composizione `Retry(CircuitBreaker(Bulkhead))`, evitare la self-invocation ed essere
+   testabile in modo deterministico; l'intake usa l'**annotazione `@RateLimiter`** (su Boot 4 le annotazioni ora
+   fanno weave, resilience4j 2.4.0 / `resilience4j-spring-boot4` — vedi `agent-log` #2).
 
 ---
 
@@ -141,22 +143,23 @@ resilience4j:
 (de-sincronizza i client, anti-storm); bulkhead **semaforo** con `max-wait PT0S` = rifiuto immediato, niente coda.
 
 ### 2c. Backpressure 429 al solo edge
-`services/orders/.../controller/OrdersIntakeRateLimiter.kt`:
+`services/orders/.../controller/OrdersController.kt`:
 ```kotlin
-fun <T> withPermit(block: () -> T): T {
-    if (!limiter.acquirePermission()) {     // con timeout PT0S ritorna subito true/false
-        shed.increment()                    // metrica low-cardinality: ogni shed è una time series
-        throw IntakeOverloadedException(retryAfterSeconds())   // -> il controller mappa a 429 + Retry-After
-    }
-    return block()
+@RateLimiter(name = "orders-intake")   // resilience4j-spring-boot4 + spring-boot-starter-aop
+@PostMapping
+fun place(...): ResponseEntity<OrderResponse> {
+    // oltre budget l'aspect lancia RequestNotPermitted PRIMA di questo corpo (DB/outbox intatti);
+    // GlobalExceptionHandler la mappa a 429 + Retry-After e incrementa orders_intake_shed_total
+    ...
 }
 ```
 **Design:** "backpressure non è fallimento, è rifiuto controllato; le code ritardano solo il fallimento". Sotto
 sovraccarico la POST `/api/orders` risponde **429 + Retry-After** invece di accodare fino al collasso. Lo shedding è
 **solo all'edge**: le chiamate interne del saga sono governate da breaker/bulkhead, mai da un 429.
 **Implementazione:** `Retry-After` è **derivato** dalla finestra del limiter (non un numero magico) → header e limiter
-non possono divergere. Anche qui registry, non annotazione. La metrica `orders_intake_shed_total` è **senza label
-ad alta cardinalità** (no orderId/userId) — "le label ad alta cardinalità distruggono i sistemi di metriche".
+non possono divergere. Qui usiamo l'annotazione `@RateLimiter` (a differenza del gateway, non c'è composizione da
+ordinare né self-invocation). La metrica `orders_intake_shed_total` è **senza label ad alta cardinalità** (no
+orderId/userId) — "le label ad alta cardinalità distruggono i sistemi di metriche".
 
 > Inoltre (sempre Fase 2): fallback **`PAYMENT_PENDING`** quando il breaker è aperto (l'ordine non è né rifiutato né
 > appeso) + un **recovery sweeper** che lo drena quando Payments torna, o lo rigetta entro il TTL del hold (così non si
