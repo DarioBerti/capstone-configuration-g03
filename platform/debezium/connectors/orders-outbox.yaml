@@ -1,0 +1,51 @@
+# Debezium Postgres connector for the ORDERS outbox. Reads orders.outbox_events off the WAL and, via the
+# Outbox Event Router SMT, republishes each row exactly as the old relay did: topic = the `topic` column,
+# key = aggregate_id (orderId), value = the raw JSON `payload`. Shared by prod and kind.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: orders-outbox
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: debezium-connect
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  # one task: a single outbox table, and tasksMax>1 would not help (and could reorder)
+  tasksMax: 1
+  config:
+    plugin.name: pgoutput
+    # connect to the CNPG PRIMARY: logical decoding runs only on the primary (the `-rw` service)
+    database.hostname: orders-db-rw.eurotransit.svc.cluster.local
+    database.port: 5432
+    database.user: debezium
+    database.password: "${directory:/mnt/debezium-db:orders-password}"
+    database.dbname: ordersdb
+    # required Debezium logical name / default topic prefix; the EventRouter overrides the per-record topic
+    topic.prefix: orders
+    # capture ONLY the outbox table (the heartbeat table is in the publication but excluded here → filtered)
+    table.include.list: orders.outbox_events
+    # start from the current LSN — do NOT re-emit the historical (already-delivered) outbox rows
+    snapshot.mode: no_data
+    # reuse the Flyway-created slot + publication; never try to CREATE the publication (the role is not superuser)
+    slot.name: orders_outbox
+    publication.name: dbz_outbox
+    publication.autocreate.mode: disabled
+    # disk-fill guard: bump the heartbeat row so the slot's confirmed LSN advances even when the outbox is idle
+    # but the (uncaptured) business tables are busy — otherwise the slot pins WAL and fills the PVC.
+    heartbeat.interval.ms: 10000
+    heartbeat.action.query: "UPDATE orders.debezium_heartbeat SET ts = now() WHERE id = 1"
+    # ── Outbox Event Router: reproduce the exact pre-CDC wire format ──
+    transforms: outbox
+    transforms.outbox.type: io.debezium.transforms.outbox.EventRouter
+    # route to the topic named by the `topic` column value (order-placed, reserve-seats, authorize-payment, …)
+    transforms.outbox.route.by.field: topic
+    transforms.outbox.route.topic.replacement: "${routedByValue}"
+    # message key = aggregate_id (orderId) → preserves per-order ordering within a partition
+    transforms.outbox.table.field.event.key: aggregate_id
+    # message value = the payload column verbatim (raw JSON string; StringConverter → byte-identical)
+    transforms.outbox.table.field.event.payload: payload
+    transforms.outbox.table.field.event.id: id
+    # our type column is `event_type` (not the EventRouter default `type`) — map it so the SMT does not look for a missing column
+    transforms.outbox.table.field.event.type: event_type
+    # keep payload as the raw JSON string the consumers already parse — do NOT expand it into a struct
+    transforms.outbox.table.expand.json.payload: false

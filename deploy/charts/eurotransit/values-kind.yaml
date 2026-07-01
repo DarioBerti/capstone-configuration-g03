@@ -49,6 +49,11 @@ keycloak:
       password: bob
       roles: [USER, ADMIN]
 
+# Local Debezium: render plaintext <db>-debezium role secrets (no kubeseal on a laptop). Prod keeps
+# devSecrets=false and uses committed SealedSecrets.
+debezium:
+  devSecrets: true
+
 # Use locally-built images from the kind local registry (localhost:5001) instead of ACR.
 # Build + push them with `just images-kind`. Base values.yaml keeps the ACR repository for prod.
 # pullPolicy: Always so a rebuilt :dev image is re-pulled on the next pod restart (dev loop).

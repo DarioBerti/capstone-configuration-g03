@@ -1,0 +1,30 @@
+# Argo CD Application for the Debezium CDC stack (Kafka Connect + the outbox connectors). Closes the gap
+# where platform/ Kafka manifests were applied out-of-band: this path IS GitOps-reconciled.
+# Deploys into the `kafka` namespace (where Strimzi + the Connect cluster live), NOT `eurotransit`.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: debezium
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/DarioBerti/capstone-configuration-g03.git
+    targetRevision: main
+    path: platform/debezium
+    directory:
+      recurse: true
+      # kind/ holds the laptop-only Connect variant (applied via `just debezium-kind-apply`); never in prod
+      exclude: "kind/*"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kafka
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

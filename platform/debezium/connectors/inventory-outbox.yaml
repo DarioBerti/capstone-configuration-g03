@@ -1,0 +1,36 @@
+# Debezium Postgres connector for the INVENTORY outbox (reservation-result, seats-confirmed replies).
+# Same Outbox Event Router mapping as orders: topic = `topic` column, key = aggregate_id, value = raw JSON.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: inventory-outbox
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: debezium-connect
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  config:
+    plugin.name: pgoutput
+    database.hostname: inventory-db-rw.eurotransit.svc.cluster.local
+    database.port: 5432
+    database.user: debezium
+    database.password: "${directory:/mnt/debezium-db:inventory-password}"
+    database.dbname: inventorydb
+    topic.prefix: inventory
+    table.include.list: inventory.outbox_events
+    snapshot.mode: no_data
+    slot.name: inventory_outbox
+    publication.name: dbz_outbox
+    publication.autocreate.mode: disabled
+    heartbeat.interval.ms: 10000
+    heartbeat.action.query: "UPDATE inventory.debezium_heartbeat SET ts = now() WHERE id = 1"
+    transforms: outbox
+    transforms.outbox.type: io.debezium.transforms.outbox.EventRouter
+    transforms.outbox.route.by.field: topic
+    transforms.outbox.route.topic.replacement: "${routedByValue}"
+    transforms.outbox.table.field.event.key: aggregate_id
+    transforms.outbox.table.field.event.payload: payload
+    transforms.outbox.table.field.event.id: id
+    transforms.outbox.table.field.event.type: event_type
+    transforms.outbox.table.expand.json.payload: false

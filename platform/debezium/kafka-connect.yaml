@@ -1,0 +1,63 @@
+# Kafka Connect cluster running Debezium (PROD / HA). Replaces the retired in-app outbox relay: it reads
+# each money-path DB's outbox_events off the Postgres WAL (logical decoding) and publishes to Kafka.
+# For LOCAL kind use kind/kafka-connect-kind.yaml instead (1 replica, RF=1, local-registry image).
+#
+# The Debezium plugin is baked into the image (see the Dockerfile); the DB password reaches the connectors
+# from the `debezium-db` secret mounted as a template volume + DirectoryConfigProvider (see the connectors/).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: debezium-connect
+  namespace: kafka
+  annotations:
+    # let the Strimzi operator manage connectors declaratively from KafkaConnector CRs (connectors/)
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 4.3.0
+  replicas: 3
+  bootstrapServers: eurotransit-kafka-bootstrap.kafka.svc:9092
+  # prebuilt image = Strimzi Connect base + Debezium Postgres plugin (built from ./Dockerfile)
+  image: labg03clusterregistry.azurecr.io/eurotransit/debezium-connect:1.0.0
+  # group.id + the internal Connect bookkeeping topics are first-class spec fields in Strimzi v1
+  groupId: debezium-connect
+  offsetStorageTopic: debezium-connect-offsets
+  configStorageTopic: debezium-connect-configs
+  statusStorageTopic: debezium-connect-status
+  config:
+    # internal topics replicated x3 to match the money-path durability posture
+    config.storage.replication.factor: 3
+    offset.storage.replication.factor: 3
+    status.storage.replication.factor: 3
+    # STRING passthrough: emit the outbox key/payload columns verbatim so the on-wire bytes stay identical to
+    # the old KafkaTemplate<String,String> producer (raw JSON value, plain-string key) — zero consumer changes.
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: org.apache.kafka.connect.storage.StringConverter
+    key.converter.schemas.enable: false
+    value.converter.schemas.enable: false
+    # DirectoryConfigProvider reads each mounted secret KEY as its own file: ${directory:<dir>:<key>}.
+    # (A K8s secret volume mounts one file per key holding the raw value — which is exactly this provider's model.)
+    config.providers: directory
+    config.providers.directory.class: org.apache.kafka.common.config.provider.DirectoryConfigProvider
+  # mount the kafka-namespace `debezium-db` secret (one key per DB) as files the connectors read via
+  # DirectoryConfigProvider. Strimzi v1 dropped spec.externalConfiguration; use the generic template volumes.
+  template:
+    pod:
+      volumes:
+        - name: debezium-db
+          secret:
+            secretName: debezium-db
+    connectContainer:
+      volumeMounts:
+        # Strimzi v1 requires additional-volume mount paths under /mnt
+        - name: debezium-db
+          mountPath: /mnt/debezium-db
+          readOnly: true
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      memory: 1Gi
+  jvmOptions:
+    -Xms: 512m
+    -Xmx: 512m

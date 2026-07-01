@@ -244,6 +244,18 @@ services:
 #
 #   - catalog-db: single instance; staleness-tolerant by definition
 #
+# Debezium CDC: the outbox relay is Kafka Connect + Debezium (platform/debezium/) reading outbox_events off
+# each money-path DB's WAL. The connector authenticates as the CNPG-managed `debezium` role (see databases
+# below); its password is supplied per-DB by a `<db>-debezium` secret.
+debezium:
+  # LOCAL-ONLY: render plaintext <db>-debezium secrets so kind works without kubeseal (mirrors keycloak.devSecrets).
+  # MUST stay false in prod; there they are committed as SealedSecrets (see platform/debezium/README.md).
+  devSecrets: false
+  dev:
+    # dev-only password for the debezium replication role; the kafka-namespace Connect secret created by the
+    # `debezium-kind-apply` justfile target uses the SAME value so the login matches. Prod uses sealed secrets.
+    dbPassword: debezium-dev-pass
+
 # NOTE: `postgresql.synchronous` requires CloudNativePG >= 1.25
 databases:
   catalog-db:
@@ -272,6 +284,12 @@ databases:
       method: any
       number: 1
       dataDurability: preferred
+    # Debezium CDC drains the outbox off the WAL (see templates/databases.yaml): needs wal_level=logical + a replication role
+    logicalReplication: true
+    managedRoles:
+      - name: debezium
+        secret: orders-db-debezium   # basic-auth (username=debezium, password); sealed under deploy/ (ns eurotransit)
+        replication: true
   inventory-db:
     # 3 instances: survive losing ONE replica without blocking writes (the invariant store)
     instances: 3
@@ -282,11 +300,21 @@ databases:
       method: any
       number: 1
       dataDurability: required
+    logicalReplication: true
+    managedRoles:
+      - name: debezium
+        secret: inventory-db-debezium
+        replication: true
   payments-db:
     # single instance: correctness is the idempotency table, not replication (team decision)
     instances: 1
     database: paymentsdb
     owner: payments
+    logicalReplication: true
+    managedRoles:
+      - name: debezium
+        secret: payments-db-debezium
+        replication: true
 
   users-db:
     # single instance: profile data is not on the money path and tolerates a short failover
