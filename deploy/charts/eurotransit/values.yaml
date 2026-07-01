@@ -67,14 +67,13 @@ keycloak:
   # secret the operator generates itself, and a collision makes the operator's reconcile 409 and abort.
   adminSecret: keycloak-bootstrap-admin
   # LOCAL-ONLY: render plain Secrets so kind works without kubeseal. MUST stay false in this base file;
-  # in prod the three secrets (keycloak-db, keycloak-bootstrap-admin, orders-oidc) are committed as
+  # in prod the secrets (keycloak-db, keycloak-bootstrap-admin) are committed as
   # SealedSecrets (see platform/keycloak/README.md). values-kind.yaml flips this to true.
   devSecrets: false
   dev:
     adminUsername: admin
     adminPassword: admin
     dbPassword: keycloak-dev-pass
-    ordersClientSecret: dev-orders-svc-secret
   # Frontend (SPA) client knobs. Base = prod only: the public domain is always allowed; dev appends
   # localhost in values-kind.yaml. directAccessGrants stays OFF in prod (no password grant on a public
   # client) — kind turns it on so test accounts can mint a token via curl.
@@ -130,15 +129,10 @@ services:
     usesKafka: true
     # validates inbound user JWTs (resource server)
     secured: true
-    # Orders also CALLS Inventory/Payments off the request thread (Kafka saga), so it mints a service token
-    # via client credentials. clientId + the secret holding its client-secret (key: client-secret).
-    oidcClient:
-      clientId: orders-svc
-      secretName: orders-oidc
-    # The saga's synchronous decision calls (Orders -> Inventory/Payments) go to the in-cluster Service DNS names; locally the app falls back to localhost ports
-    extraEnv:
-      INVENTORY_BASE_URL: http://inventory:8080
-      PAYMENTS_BASE_URL: http://payments:8080
+    # NB (async saga): Orders makes NO sync calls to Inventory/Payments — it emits Kafka commands and reacts to
+    # replies. So it needs no sibling base-URLs and no service-token client: the former oidcClient (orders-svc /
+    # orders-oidc) and extraEnv (INVENTORY/PAYMENTS_BASE_URL) were removed with the sync→async cutover. It stays a
+    # resource server (secured) only to validate the inbound user JWT on POST /api/orders.
     # Public sync entry of the money path: scale out under load instead of queueing to collapse (works together with load shedding / 429, Pillar C)
     hpa:
       enabled: true
