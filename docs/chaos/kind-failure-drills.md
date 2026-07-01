@@ -149,7 +149,7 @@ Proves in-flight saga steps survive a deploy with no loss/duplication.
 ### Drill 6 — DB failover (CNPG)
 - **kind caveat (read first):** on kind everything runs on **one node** and the DBs are single-instance, so
   there is no true node/AZ loss and **no RTO/RPO to measure** — that is an **AKS-only** graded proof
-  (`docs/slo.md` RTO ≤ 60s; `docs/chaos/05-pg-failover.md`). On kind you can at most kill a DB pod to watch the
+  (`docs/design.md` §4-D / §3 RPO=0, RTO ≤ 60s; `docs/chaos/05-pg-failover.md`). On kind you can at most kill a DB pod to watch the
   app's transient-error handling and the **readiness probe** flip the pod out of the Service endpoints.
 - **Inject (kind-safe):** `kubectl -n eurotransit delete pod <cluster>-<n>` for a DB pod (e.g. `orders-db-1`).
 - **Observe:** brief write stall surfaces as transient errors in the owning service; readiness flips; requests
