@@ -1,0 +1,52 @@
+{{- /*
+Fase 5 — BLUE/GREEN delivery on the money path (alternative to the canary; mutually exclusive).
+
+blue  = the stable `orders` workload (already rendered by deployments.yaml).
+green = a second `orders-green` workload (this file), full capacity, running the candidate `greenTag`.
+
+An IngressRoute(/api/orders) points 100% to ONE colour (`services.orders.bluegreen.active`). Release is an
+ATOMIC cutover (flip `active` blue->green + commit -> Argo reconciles); rollback is the same flip back —
+instant, because the old colour is still running. While active=blue, green serves 0 public traffic, so it
+can be smoke-tested internally (its Service `orders-green` is reachable in-cluster) before the switch.
+
+Contrast with the canary (ingressroute-orders.yaml): canary RAMPS a small % (5->50->100) to observe under
+real load; blue/green keeps two full environments and switches 100% at once. Both keep all-at-once/rolling
+OFF the money path (rolling gives no exposure control; all-at-once exposes everyone at once).
+
+Gated + default-off. Canary and blue/green both own /api/orders, so enabling both is a hard error.
+*/ -}}
+{{- $orders := .Values.services.orders }}
+{{- $bg := $orders.bluegreen | default dict }}
+{{- $canary := $orders.canary | default dict }}
+{{- if and (dig "enabled" false $bg) (dig "enabled" false $canary) }}
+{{- fail "services.orders: enable EITHER canary OR bluegreen, not both — they both own the /api/orders route" }}
+{{- end }}
+{{- if $bg.enabled }}
+{{- $active := dig "active" "blue" $bg }}
+---
+{{ include "eurotransit.serviceWorkload" (dict
+     "root" $
+     "name" "orders-green"
+     "svc" $orders
+     "tag" $bg.greenTag
+     "replicas" $orders.replicaCount) }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: orders
+  labels:
+    {{- include "eurotransit.labels" (dict "svc" "orders" "root" $) | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`{{ .Values.global.domain }}`) && PathPrefix(`/api/orders`)
+      kind: Rule
+      services:
+        # 100% to the ACTIVE colour: blue = the stable `orders` Service, green = `orders-green`.
+        - name: {{ if eq $active "green" }}orders-green{{ else }}orders{{ end }}
+          port: {{ $orders.port }}
+  tls:
+    secretName: eurotransit-tls
+{{- end }}
