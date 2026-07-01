@@ -19,6 +19,11 @@ global:
   # collector's name/namespace is a one-line change instead of editing the Deployment template; kind
   # can override it in values-kind.yaml. Services stay backend-agnostic (they only know "send OTLP here").
   otlpEndpoint: http://otel-collector.observability.svc:4318/v1/traces
+  # Console log format for every service, injected as LOGGING_STRUCTURED_FORMAT_CONSOLE (overrides the
+  # app's application-cluster.yml). `ecs` = structured ECS JSON for a log pipeline to parse (Pillar D
+  # log<->trace correlation). kind overrides this to "" (plaintext) in values-kind.yaml, having no log
+  # aggregation stack.
+  logFormat: ecs
   # OIDC contract injected into every secured service (validates Keycloak JWTs). The `issuer` MUST equal
   # the `iss` claim Keycloak stamps on tokens (the public frontend URL); jwkSetUri/tokenUri point at the
   # same public realm. kind overrides these in values-kind.yaml.

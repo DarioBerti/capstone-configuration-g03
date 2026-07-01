@@ -140,6 +140,16 @@ strimzi-install:
 kafka-kind-apply:
     kubectl --context {{ctx}} apply -f platform/strimzi/kafka-kind.yaml
 
+# fast topic reset on kind: delete EVERY KafkaTopic (Strimzi deletes the underlying topic + data via its
+# finalizer), then recreate the full set from kafka-kind.yaml. Wipes all messages + consumer offsets — dev
+# reset only, don't run mid-saga. Usage: `just kafka-topics-reset`.
+kafka-topics-reset:
+    kubectl --context {{ctx}} -n kafka delete kafkatopic --all --ignore-not-found
+    kubectl --context {{ctx}} apply -f platform/strimzi/kafka-kind.yaml
+    @echo ">> waiting for topics to become Ready ..."
+    kubectl --context {{ctx}} -n kafka wait --for=condition=Ready kafkatopic --all --timeout=120s
+    kubectl --context {{ctx}} -n kafka get kafkatopic
+
 # install the Keycloak Operator (CRDs + controller) into the eurotransit namespace. MUST run before
 # `app-deploy` so the chart's Keycloak/KeycloakRealmImport CRs have their CRDs. -k uses the kustomize base.
 keycloak-install:
@@ -202,6 +212,14 @@ kafka-forward local_port="9092":
     @echo ">> set KAFKA_BOOTSTRAP=localhost:{{local_port}} in your IDE run config"
     @echo ">> forwarding svc/eurotransit-kafka-bootstrap -> localhost:{{local_port}} (Ctrl-C to stop) ..."
     kubectl --context {{ctx}} -n kafka port-forward svc/eurotransit-kafka-bootstrap {{local_port}}:9092
+
+# deploy the Kafka UI dev console (kind/demo only) and expose it via the Traefik Ingress — NO port-forward.
+# Reachable at https://kafka-ui.localhost (auto-resolves to 127.0.0.1; accept the self-signed cert warning).
+# Browse topics, live messages, consumer lag and the *-dlt contents while the saga runs.
+kafka-ui:
+    kubectl --context {{ctx}} apply -f platform/strimzi/kafka-ui.yaml
+    kubectl --context {{ctx}} -n kafka rollout status deploy/kafka-ui --timeout=120s
+    @echo ">> Kafka UI ready: https://kafka-ui.localhost  (self-signed cert — accept the browser warning)"
 
 # ── whole-app local dev (run all 6 services in your IDE, data layer in kind) ─
 # Workflow:  just dev-down   (free the cluster of app pods so they don't fight your local ones)

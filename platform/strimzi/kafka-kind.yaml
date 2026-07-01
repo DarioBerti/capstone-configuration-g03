@@ -60,8 +60,10 @@ spec:
     topicOperator: {}
     userOperator: {}
 ---
-# The 7 saga topics. partitions=3 is fine on one broker (parallelism + per-key ordering);
-# replicas=1 because there is only one broker to hold a copy.
+# The async saga topics (must match platform/strimzi/kafka-topics.yaml, minus the replica count).
+# partitions=3 is fine on one broker (parallelism + per-key ordering); replicas=1 because there is only
+# one broker to hold a copy. Groups: trigger, commands (Orders->svc), replies (svc->Orders), terminal/
+# notify, and one dead-letter topic per consuming service.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
@@ -76,7 +78,7 @@ spec:
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
-  name: inventory-reserved
+  name: reserve-seats
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit
@@ -87,7 +89,7 @@ spec:
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
-  name: inventory-released
+  name: authorize-payment
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit
@@ -98,7 +100,84 @@ spec:
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
-  name: payment-authorized
+  name: confirm-seats
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: capture-payment
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: release-seats
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: cancel-authorization
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: reservation-result
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payment-result
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: seats-confirmed
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payment-captured
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit
@@ -132,6 +211,39 @@ apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: notification-requested
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: orders-dlt
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: inventory-dlt
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payments-dlt
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit

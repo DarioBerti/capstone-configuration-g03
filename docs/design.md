@@ -9,40 +9,59 @@
 flowchart TB
     Client([Client / Load-gen]) -->|HTTPS| Traefik[Traefik Ingress + TLS]
     Traefik -->|sync GET| Catalog[Catalog svc]
-    Traefik -->|sync POST /api/orders| Orders[Orders svc]
+    Traefik -->|sync POST /api/orders → 202| Orders[Orders svc]
     Catalog --> CatDB[(Catalog DB)]
     Orders --> OrdDB[(Orders DB + outbox)]
-    Orders -.->|outbox -> publish| Kafka{{Kafka / Strimzi}}
-    Orders -->|sync reserve idempotency-key| Inventory[Inventory svc]
-    Orders -->|sync authorize CB + idempotency| Payments[Payments svc]
-    Inventory --> InvDB[(Inventory DB atomic UPDATE)]
-    Payments --> PayDB[(Payments idempotency)]
+    Inventory --> InvDB[(Inventory DB atomic UPDATE + outbox)]
+    Payments --> PayDB[(Payments idempotency + outbox)]
+    Orders -.->|commands: reserve-seats / authorize-payment / confirm-seats / capture-payment| Kafka{{Kafka / Strimzi}}
+    Kafka -.->|commands| Inventory[Inventory svc]
+    Kafka -.->|commands| Payments[Payments svc]
+    Inventory -.->|replies: reservation-result / seats-confirmed| Kafka
+    Payments -.->|replies: payment-result / payment-captured| Kafka
+    Kafka -.->|replies| Orders
     Kafka -->|notification-requested / order-confirmed| Notifications[Notifications svc]
     Notifications -.->|may fail without failing checkout| Sink([Email/SMS mock])
-    Inventory -.->|inventory-reserved| Kafka
-    Payments -.->|payment-authorized| Kafka
-    Orders -.->|order-placed / order-confirmed| Kafka
+    Orders -.->|order-placed (self) / -confirmed / -rejected| Kafka
 ```
+
+The money path is **fully asynchronous**: there is no synchronous Orders→Inventory/Payments call. Orders
+orchestrates by emitting **commands** and reacting to **replies**, each carried on its own Kafka topic and
+each service replying from its **own transactional outbox** (replies are load-bearing, not best-effort).
+See decision 13 (async saga cutover) for the rationale and the Pillar A↔C trade-off.
 
 ## 2. Money path (critical path)
 
-1. **Place order (sync, returns fast):** `POST /api/orders` → Orders persists the order
-   `PENDING` and writes `order-placed` to the **outbox** in the *same* DB transaction; returns
-   **202 Accepted** with `orderId`.
-2. **Publish (outbox → Kafka):** a coroutine relay publishes `order-placed` (at-least-once).
-3. **Reserve (async pipeline → sync call):** Orders consumes `order-placed` and calls
-   `Inventory.reserve` synchronously with an idempotency key. Atomic conditional UPDATE → on
-   success `RESERVED` + `inventory-reserved`; if sold out → compensate, order `REJECTED`.
-4. **Authorize (sync, protected):** Orders calls `Payments.authorize` behind circuit breaker +
-   timeout + retry(backoff+jitter) + bulkhead, with idempotency key. Success → `payment-authorized`;
-   breaker open/timeout → fallback (no unbounded hang).
-5. **Confirm:** order `CONFIRMED` → `order-confirmed` + `notification-requested`.
-6. **Notify (fully async, degrades):** Notifications consumes and sends; if down, checkout has
-   already succeeded.
+Orchestrated, **serial, two-phase (hold → commit), capture-last** async saga. Orders owns the state
+machine `PENDING → RESERVED → AUTHORIZED → CONFIRMED` (`REJECTED` terminal); every command/reply commits
+together with the state change via the transactional outbox, and every handler is idempotent (status guard
++ `UNIQUE(order_id…)`).
 
-**Key subtlety:** the sync calls to Inventory/Payments happen *inside* the async pipeline —
-the HTTP request returns immediately, but later stages make synchronous calls where a decision
-is needed *now*.
+1. **Place order (sync, returns fast):** `POST /api/orders` → Orders persists the order `PENDING` and
+   writes `order-placed` to the **outbox** in the *same* DB transaction; returns **202 Accepted**.
+2. **Trigger (outbox → Kafka → self):** the relay publishes `order-placed`; Orders consumes it and emits
+   the `reserve-seats` command (at-least-once).
+3. **Phase 1 — hold the seat.** Inventory consumes `reserve-seats`, does the atomic conditional UPDATE,
+   and replies `reservation-result` from its outbox: `RESERVED` → Orders advances to `RESERVED` and emits
+   `authorize-payment`; `SOLD_OUT` → Orders `REJECTED` (nothing held).
+4. **Phase 1 — hold the funds.** Payments consumes `authorize-payment`, **authorizes only (holds funds, no
+   capture)**, and replies `payment-result`: `AUTHORIZED` → Orders advances to `AUTHORIZED` and emits
+   `confirm-seats`; `DECLINED` → Orders emits `release-seats` (compensation) and `REJECTED`.
+5. **Phase 2 — commit the seat.** Inventory consumes `confirm-seats`, commits the hold, and replies
+   `seats-confirmed`: `CONFIRMED` → Orders emits `capture-payment`; `EXPIRED` (hold lapsed under payment
+   lag) → Orders emits `cancel-authorization` (releases the funds hold — **no capture, so no refund**) and
+   `REJECTED`.
+6. **Phase 2 — capture the funds (capture-last).** Payments consumes `capture-payment`, captures the held
+   funds, and replies `payment-captured` → Orders → `CONFIRMED`, emits `order-confirmed` +
+   `notification-requested`.
+7. **Notify (fully async, degrades):** Notifications consumes `notification-requested`; if down, checkout
+   has already succeeded.
+
+**Key property:** money is *captured last*, only after the seat hold is committed — so there is never a
+captured charge without a confirmed seat, and a hold that expired under payment lag is caught at
+`confirm-seats` (and the free authorization-cancel runs) rather than silently oversold or charged. A reply
+that never arrives is re-driven by the **timeout sweeper** (re-drive is safe — commands are idempotent); a
+poison/exhausted message is parked on the consumer's dead-letter topic (`*-dlt`).
 
 ## 3. Sync vs async boundaries
 
@@ -50,10 +69,14 @@ is needed *now*.
 |---|---|---|
 | client → gateway → Catalog | sync | read, tolerant of staleness |
 | client → gateway → Orders (place) | sync, returns 202 | user needs an immediate ack, not the full result |
-| Orders → Inventory (reserve) | sync | a reservation decision must be made now |
-| Orders → Payments (authorize) | sync | an authorization decision must be made now |
+| Orders ↔ Inventory (reserve / confirm / release) | **async** Kafka command/reply | decouple the money path; absorb bursts as lag, ride a downstream outage |
+| Orders ↔ Payments (authorize / capture / cancel) | **async** Kafka command/reply | as above; capture-last keeps money safe across the gap |
 | pipeline stages / all eventing | async (Kafka) | decouple, absorb bursts, survive downstream blips |
 | Notifications | async | must fail without failing checkout |
+
+> Updated by decision 13 (async cutover, 2026-06-30): the former synchronous Orders→Inventory/Payments
+> HTTP calls ("a decision must be made now") are now Kafka commands answered by replies. The decision is
+> still made before the saga advances — it just travels over the log instead of an open HTTP connection.
 
 ## 4. Design decisions (summary — full rationale owned by team)
 
@@ -68,16 +91,29 @@ is needed *now*.
    domains. Catalog single (staleness-tolerant). No service reads another's DB.
 2. **No dedicated auth service** (not required; would be scope creep). Optional gateway-level
    token/forwardAuth only.
-3. **Orchestrated saga** (Orders coordinates; stages Kafka-driven; compensations on failure).
+3. **Orchestrated saga** (Orders coordinates; stages Kafka-driven; compensations on failure). *(Refined by
+   #13: now serial two-phase hold→commit, capture-last — the state machine is `PENDING → RESERVED →
+   AUTHORIZED → CONFIRMED`, and each step is a Kafka command answered by a reply.)*
 4. **Transactional outbox** to avoid the dual-write problem → at-least-once → idempotent consumers.
+   *(Extended by #13: Inventory and Payments now each own an outbox too — their replies are load-bearing,
+   not the old best-effort informational events.)*
 5. **Inventory consistency = CP / PACELC PC-EC**: prefer rejecting a reservation over overselling
    in a partition; accept slightly higher latency for consistency without a partition.
    Implemented as an atomic conditional `UPDATE ... WHERE available >= qty` (single-row,
    transactional) + a reservation state machine (`RESERVED → CONFIRMED | RELEASED/EXPIRED`).
 6. **Idempotency** on the money path: key = `orderId`. Inventory dedup `(orderId, productId)`;
    Payments dedup by key with persisted result. **Dedup-insert and decrement in one transaction.**
-7. **Resilience4j — circuit breaker (Phase 2 #1, IMPLEMENTED 2026-06-25).** Orders→Payments is wrapped in a
-   circuit breaker applied **programmatically** through the injected `CircuitBreakerRegistry`
+7. **Resilience4j — circuit breaker / retry / bulkhead on Orders→Payments (Phase 2 #1–#4).**
+   ⚠️ **SUPERSEDED by decision 13 (async cutover, 2026-06-30).** The money path no longer makes a
+   synchronous Orders→Payments HTTP call, so the circuit breaker, the per-dependency bulkheads, the
+   inline transport retry, and the `void`/refund compensation described below were **removed** along with
+   the `gateway/` package and the `PAYMENT_PENDING` park state. The resilience story they provided is
+   replaced by Kafka buffering + bounded consumer retry + dead-letter topics + the timeout sweeper (see
+   #13). The text below is retained as the historical record of what was built and why; the **only**
+   surviving Resilience4j use is the edge `@RateLimiter` (Phase 2 #3, still current). The circuit breaker
+   was a checked Pillar C / DoD item — #13 documents that deliberate Pillar A↔C re-balance.
+
+   Orders→Payments **was** wrapped in a circuit breaker applied **programmatically** through the injected `CircuitBreakerRegistry`
    (`HttpPaymentsGateway`), **not** the `@CircuitBreaker` annotation. Annotations now weave on Boot 4
    (resilience4j 2.4.0 / `resilience4j-spring-boot4`, agent-log #2), so the registry is a **deliberate
    design choice, not a compatibility workaround**: the gateway composes `Retry(CircuitBreaker(Bulkhead(…)))`
@@ -196,6 +232,42 @@ is needed *now*.
     live in orders-db). payments-db and catalog-db: single instance (see decision 1).
     Requires CNPG ≥ 1.25.
 
+13. **Async saga cutover — sync HTTP → Kafka command/reply (team decision, 2026-06-30).** The money path
+    was converted from a synchronous-HTTP orchestration (Orders calling Inventory/Payments over `RestClient`)
+    to an **orchestrated, serial, two-phase async Kafka command/reply** pipeline. Analysed in
+    `capstone-application-g03/docs/sync-vs-async-resilience.md` (sync-vs-async pros/cons, resilience-pattern
+    placement, chaos behaviour); the failure-mode map and the Pillar A scaling analysis drove the choice.
+    - **What changed.** Orders emits six commands (`reserve-seats`, `authorize-payment`, `confirm-seats`,
+      `capture-payment`, `release-seats`, `cancel-authorization`) via its outbox and reacts to four replies
+      (`reservation-result`, `payment-result`, `seats-confirmed`, `payment-captured`); Inventory and Payments
+      each gained inbound command listeners and an **outbox of their own** for the (now load-bearing) replies.
+      Payments was split **two-phase**: `authorize` holds funds only, `capture` is a separate last step,
+      `cancel-authorization` releases an uncaptured hold. The state machine is `PENDING → RESERVED →
+      AUTHORIZED → CONFIRMED` (`PAYMENT_PENDING` removed). The old best-effort informational topics
+      (`inventory-reserved`, `inventory-released`, `payment-authorized`) were retired — they had no consumer.
+    - **Why.** For a transit-ticketing marketplace whose load is bursty (schedule drops, commuter rush,
+      promotions), the async design wins where it hurts most — **spike absorption** (a burst becomes bounded
+      Kafka lag, not edge 429s), **downstream-outage riding** (a slow/down Payments grows lag, not blocked
+      Orders threads — the saga resumes on recovery), and **tail-latency isolation** between hops. Two-phase
+      **capture-last** also closes a real oversell/charge gap (a seat hold can expire under payment lag; it is
+      now caught at `confirm-seats` and the free authorization-cancel runs — no captured charge without a
+      confirmed seat).
+    - **The cost (honest Pillar A↔C re-balance).** This **retires the graded Pillar C circuit breaker**
+      (decision 7) and its bulkhead/retry/void compensation. The resilience story moves to **Kafka buffering
+      + bounded non-blocking consumer retry + a dead-letter topic per service (`orders-dlt`/`inventory-dlt`/
+      `payments-dlt`, `DefaultErrorHandler` + `DeadLetterPublishingRecoverer`) + a timeout sweeper** that
+      re-drives a saga stuck in a non-terminal state past a deadline (`OrderTimeoutSweeper`; re-drive is safe
+      because commands are idempotent). Kafka becomes **load-bearing for every step**, so it must run the
+      durable posture (`acks=all`, `min.insync.replicas≥2`, replication 3, no unclean leader election — the
+      3-node `kafka.yaml`, not the single-node kind variant). The edge `@RateLimiter` (Phase 2 #3) and
+      Inventory's never-oversell guarantee are unchanged. **Virtual threads (Java 21 + Boot 4) + the already-202
+      checkout blunt the classic "blocking doesn't scale" argument**, so async here is bought for *resilience
+      under burst*, not raw throughput — a deliberate trade the team owns (see §6).
+    - **Tests.** The breaker/bulkhead/retry tests were deleted; new coverage proves listener idempotency under
+      duplicate redelivery (one hold / one auth / one capture), each transition emits the right next command,
+      the three compensations fire, hold-expires-before-confirm → `EXPIRED` with no capture, and the timeout
+      sweeper re-drives. All three services green (Payments 21, Inventory 18, Orders 26).
+
 ## 4b. Phase 3 — platform decisions (D-A…D-G; team 2026-06-26, deviations verified on the real cluster 2026-06-28)
 
 Bringing the system onto a real cluster (Azure AKS), reconciled by Argo CD. Labels match `docs/FASE3_*`.
@@ -253,11 +325,13 @@ Mapped onto EuroTransit:
 - **The 202 intake.** `POST /api/orders` commits the order + outbox row and returns immediately; the
   reserve→authorize→confirm latency is taken off the request path. User-facing latency is decoupled from
   downstream latency, so a slow Payments does not hold the caller's connection/thread.
-- **Kafka between stages.** Eventing decouples producers from consumers and absorbs bursts in the log
-  (bounded, replayable) instead of piling them onto threads — this is what lets backpressure (§3, 429) and
-  the consumer's manual-ack flow shed/level load rather than collapse (deck 11 "queues just delay the failure"
-  → we bound them).
-- **The background coroutines** (`OutboxPublisher` relay, `OrderRecoverySweeper`, `ReservationReconciler`).
+- **Kafka across the whole money path (since #13).** Every saga step is now a command/reply over the log,
+  not a synchronous call — so a burst becomes a bounded, replayable backlog drained at a sustainable rate
+  (load-leveling), and a slow/down Inventory or Payments shows up as **consumer lag, not blocked Orders
+  threads**: Orders keeps accepting and the saga resumes on recovery. This is the temporal decoupling the
+  sync design could not give, and it is worth most exactly at peak (deck 11 "queues just delay the failure"
+  → we bound them with DLT + the timeout sweeper, and shed at the edge with the 429).
+- **The background coroutines** (`OutboxPublisher` relay, `OrderTimeoutSweeper`, `ReservationReconciler`).
   Each is one supervised coroutine that spends almost all its time **suspended in `delay()`**, not a parked
   thread — near-zero footprint for "always-on" polling, and they cancel cooperatively on SIGTERM.
 
@@ -269,10 +343,14 @@ Mapped onto EuroTransit:
 - **Serialization / JSON / the atomic UPDATE itself** are CPU- and DB-bound; you cannot "suspend" your way
   out of work that has to actually execute.
 
-**Blocking-vs-suspending in our own code (the deliberate consequence).** Our gateway calls use a **blocking**
-HTTP client (`RestClient`) and **blocking** JDBC, so we do **not** pretend they are non-blocking: the recovery
-sweep runs on **`Dispatchers.IO`** (the elastic pool sized for blocking I/O), while the purely
-timer-driven relays use `Dispatchers.Default` — placing blocking work on the IO pool and CPU-light work on the
-CPU pool is precisely the blocking-vs-suspending guidance from deck 06. Net: async is leverage on the
-wait-dominated edges (ack, eventing, background sweeps); on the genuinely CPU/DB-bound core we lean on the
-data model and the consistency choice instead.
+**Blocking-vs-suspending in our own code (the deliberate consequence).** After #13 the money path no longer
+has an outbound HTTP client at all — the cross-service work is Kafka listeners + the outbox relay, and the
+only blocking left is **JDBC** (and the relay's bounded Kafka ack wait). We do not pretend that is
+non-blocking: the background sweeps (`OrderTimeoutSweeper`, `ReservationReconciler`) and the outbox relay run
+on **`Dispatchers.IO`** (the elastic pool sized for blocking I/O), and each spends almost all its time
+suspended in `delay()` between ticks — placing blocking work on the IO pool and keeping the loop itself
+suspension-cheap is the blocking-vs-suspending guidance from deck 06. **Virtual threads (Java 21 + Boot 4)**
+further blunt the cost of the remaining blocking JDBC. Net: async is leverage on the wait-dominated edges
+(ack, eventing, the whole inter-service saga, background sweeps); on the genuinely CPU/DB-bound core (the
+contended single-row reservation, JSON, the atomic UPDATE) we lean on the data model and the consistency
+choice instead — which is why Inventory scales on DB saturation, not pod count.

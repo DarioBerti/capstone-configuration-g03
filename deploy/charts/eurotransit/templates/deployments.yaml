@@ -64,8 +64,14 @@ spec:
                   fieldPath: metadata.name
             - name: LOGGING_STRUCTURED_ECS_SERVICE_NODE_NAME
               value: $(POD_NAME)
+            # Console log format. `ecs` emits structured ECS JSON for a log pipeline to parse (prod,
+            # global.logFormat=ecs); on kind global.logFormat="" so the console stays human-readable
+            # plaintext — kind runs no log aggregation stack, so the JSON would be write-only. This env
+            # outranks the `logging.structured.format.console: ecs` in the app's application-cluster.yml.
+            - name: LOGGING_STRUCTURED_FORMAT_CONSOLE
+              value: {{ $.Values.global.logFormat | quote }}
             # every pod runs the in-cluster Spring profile (cluster hardening: quiet SQL, hidden health
-            # details, ECS JSON logs) — applies to stateless services like notifications too, not just DB ones
+            # details) — applies to stateless services like notifications too, not just DB ones
             - name: SPRING_PROFILES_ACTIVE
               value: "cluster"
             # where to ship traces (OTLP); overrides the local default baked in the image.

@@ -371,6 +371,68 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   `values.yaml`, e.g. `"0.99"`, so they render verbatim into the PromQL expressions — floats risked a
   formatting surprise in the rule text.)
 
+## 18. Async cutover — three parallel agents building both sides of a Kafka contract with no shared schema
+
+- **What the agents produced (2026-06-30):** the sync→async money-path cutover (decision 13) was implemented
+  by **three agents in parallel** — Payments (two-phase + outbox + listeners), Inventory (outbox + listeners),
+  Orders (reply-driven saga). Each service keeps its **own copy** of the event payload `data class`es (the
+  project's deliberate no-shared-module choice), so the producer and the consumer of every topic were written
+  by **different agents who could not see each other's code**.
+- **Why that is the risk:** the contract is enforced by nothing but matching strings — topic names, JSON field
+  names, and the **status string literals** (`"RESERVED"`/`"SOLD_OUT"`/`"AUTHORIZED"`/…). A drift (one agent
+  emitting `seats-confirmed` while another listens on `confirm-seats-result`, or a reply carrying
+  `state` where the consumer reads `status`, or `"SOLDOUT"` vs `"SOLD_OUT"`) would compile cleanly, pass every
+  in-process test (listeners are `autoStartup`-gated **off** in tests, so no test crosses the wire), and only
+  fail **silently at runtime** — a reply that never matches, a status that falls into the `else`/ignored branch
+  and wedges the saga. Each agent's own green suite proves nothing about the *seam between* services.
+- **How we caught/prevented it:** (1) a **canonical contract was pinned up front** in each agent's brief
+  (exact topic + field + status-literal spelling) rather than left to each agent to invent; (2) after all three
+  returned green, the seam was **verified against the real source, not the agents' self-reports** — a sweep of
+  the topic constants in every `events/Topics.kt`, the status string literals across all `service`/`events`
+  code, and a leftover-reference grep (`PAYMENT_PENDING`, the retired `inventory-reserved`/`payment-authorized`
+  topics, the deleted `gateway/` package). The union of topic constants used in code (17) was then checked to
+  **exactly equal** the topic set in `platform/strimzi/kafka-topics.yaml` (no orphan topic, no missing CR).
+- **Outcome:** no drift — the three independently-written copies aligned on every topic, field, and status
+  value, and the old surface was fully removed. The lesson is the method, not a bug: when agents build opposite
+  ends of an un-typed contract in parallel, the contract must be **fixed before fan-out and re-verified at the
+  seam after** — a per-service green build is necessary but not sufficient. *(Follow-up worth considering: a
+  cheap CI contract test, or a shared `:events` module / schema registry, would make this seam compiler- or
+  test-enforced instead of review-enforced.)*
+
+## 19. Async cutover — concrete mistakes the build caught across the three implementing agents
+
+Companion to #18 (which covers the contract-*drift* prevention). These are the concrete defects/deviations
+the three cutover agents produced, and how each was caught and resolved — the "verify agent output" pass.
+
+- **Orders: a `@Bean` method name collided with its own `@Configuration` class bean name →
+  `BeanDefinitionOverrideException` (caught by the build).** The agent named the dead-letter error-handler
+  factory method `kafkaErrorHandler` inside a component-scanned `@Configuration class KafkaErrorHandler`,
+  whose default bean name is also `kafkaErrorHandler` → two bean definitions for one name, context refused to
+  start. **Caught:** the agent's own `./gradlew test` (context-load failure), not review. **Fix:** renamed the
+  method to `ordersDltErrorHandler`; still the single `CommonErrorHandler` Boot auto-wires. *Telling detail:*
+  the other two agents independently avoided the trap (Inventory `commandErrorHandler`, Payments `errorHandler`)
+  — same task, three names, one collision. A reminder that a `@Bean` method must not share a name with its
+  enclosing scanned component.
+- **Orders deviated beyond the spec's named deletions: also removed `management.health.circuitbreakers.enabled:false`.**
+  The plan named only the `resilience4j.*` blocks; the agent additionally dropped the now-meaningless health key.
+  **Caught:** orchestrator review of the diff against the brief. **Verdict:** accepted — the key is inert once the
+  breaker is gone, readiness never included it. Logged so the deviation is on the record, not silent.
+- **Inventory removed a method the spec didn't mention (`InventoryService.find`) and left the GET endpoints
+  controller→repository.** `find` existed only to back the deleted `terminalReadOnLockLoss` controller helper, so
+  it was dead after the command surface was removed; the two surviving GET inspection endpoints call
+  `TripSeatsRepository` directly (a pre-existing layering shortcut, not introduced here). **Caught:** review of the
+  agent's own flagged deviations + the compile. **Verdict:** dead-code removal accepted; the GET→repository
+  shortcut left as pre-existing debt (tracked in root CLAUDE.md "current state"), not widened.
+- **Payments renamed metrics as a side effect of the two-phase split** (`payments_voids_total` →
+  `payments_cancellations_total`; added `payments_captures_total`). **Caught:** review of the agent report; a doc
+  hazard like #11 (a renamed metric leaving a doc pointing at a dead series). **Fix:** verified no dashboard/doc
+  references the old names, and the design.md/DoD updates use the new names.
+- **Independent build verification of the final state.** Beyond each agent's own green suite (Payments 21,
+  Inventory 18, Orders 26), the orchestrator re-compiled **main + test for all three services from the
+  on-disk state** (`compileTestKotlin`, all exit 0) — a leftover import of a deleted class (`gateway/*`,
+  `PAYMENT_PENDING`, the breaker registries) would slip past a green per-agent run if a test file were stale,
+  but not past a clean cross-service compile. None found.
+
 ---
 
 _Add new entries as they happen. Aim well past the required three; every caught mistake is

@@ -28,7 +28,7 @@ Subdirectories hold the per-component bootstrap config:
 
 ```
 argocd/          Argo CD Application(s) + Argo CD's own ingress/values + sealed repo creds
-strimzi/         Kafka cluster CR + KafkaTopic CRs (order-placed, inventory-reserved, ...); kafka-kind.yaml = single-node kind variant
+strimzi/         Kafka cluster CR + KafkaTopic CRs (order-placed, reserve-seats, reservation-result, ...); kafka-kind.yaml = single-node kind variant; kafka-ui.yaml = dev-only browse console at https://kafka-ui.localhost (`just kafka-ui`, never deployed to AKS)
 cert-manager/    ClusterIssuers: clusterissuer.yaml (LE staging+prod, AKS) + clusterissuer-kind.yaml (selfsigned, kind)
 traefik/         Traefik install values: values.yaml (base) + values-prod.yaml (LoadBalancer, AKS) + values-kind.yaml (hostPort, kind)
 cloudnativepg/   operator install notes (the per-service Cluster CRs live in the app chart)
