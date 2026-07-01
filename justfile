@@ -140,6 +140,16 @@ strimzi-install:
 kafka-kind-apply:
     kubectl --context {{ctx}} apply -f platform/strimzi/kafka-kind.yaml
 
+# fast topic reset on kind: delete EVERY KafkaTopic (Strimzi deletes the underlying topic + data via its
+# finalizer), then recreate the full set from kafka-kind.yaml. Wipes all messages + consumer offsets — dev
+# reset only, don't run mid-saga. Usage: `just kafka-topics-reset`.
+kafka-topics-reset:
+    kubectl --context {{ctx}} -n kafka delete kafkatopic --all --ignore-not-found
+    kubectl --context {{ctx}} apply -f platform/strimzi/kafka-kind.yaml
+    @echo ">> waiting for topics to become Ready ..."
+    kubectl --context {{ctx}} -n kafka wait --for=condition=Ready kafkatopic --all --timeout=120s
+    kubectl --context {{ctx}} -n kafka get kafkatopic
+
 # install the Keycloak Operator (CRDs + controller) into the eurotransit namespace. MUST run before
 # `app-deploy` so the chart's Keycloak/KeycloakRealmImport CRs have their CRDs. -k uses the kustomize base.
 keycloak-install:
@@ -177,6 +187,39 @@ app-verify:
     kubectl --context {{ctx}} -n eurotransit get cluster
     kubectl --context {{ctx}} -n eurotransit get ingress,certificate
 
+# ── Debezium CDC (outbox relay) ────────────────────────────────────────────
+
+# build + push the Debezium Connect image, create the kafka-ns DB secret, and apply the kind Connect cluster
+# + connectors. Run AFTER `just app-deploy` and once the DB pods are Ready (Flyway must have created the
+# dbz_outbox publications). Prod uses the debezium Argo app instead (platform/argocd/debezium-application.yaml).
+debezium-kind-apply:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    img="{{local_registry}}/{{image_prefix}}/debezium-connect:{{img_tag}}"
+    echo "== build + push $img =="
+    docker build -t "$img" platform/debezium
+    docker push "$img"
+    # kafka-namespace secret the connectors read (one key per DB). Dev password MUST match the CNPG debezium
+    # role password the chart renders on kind (debezium.dev.dbPassword in values.yaml).
+    echo "== (re)create kafka/debezium-db secret =="
+    kubectl --context {{ctx}} -n kafka create secret generic debezium-db \
+      --from-literal=orders-password=debezium-dev-pass \
+      --from-literal=inventory-password=debezium-dev-pass \
+      --from-literal=payments-password=debezium-dev-pass \
+      --dry-run=client -o yaml | kubectl --context {{ctx}} apply -f -
+    # Connect cluster (kind variant) + the shared connectors
+    kubectl --context {{ctx}} apply -f platform/debezium/kind/kafka-connect-kind.yaml
+    kubectl --context {{ctx}} apply -f platform/debezium/connectors/
+    echo ">> waiting for the Debezium connectors to become Ready ..."
+    kubectl --context {{ctx}} -n kafka wait --for=condition=Ready kafkaconnector --all --timeout=180s
+    kubectl --context {{ctx}} -n kafka get kafkaconnect,kafkaconnector
+
+# verify Debezium: Connect cluster + connectors Ready, and each DB's replication slot present + low-lag
+debezium-verify:
+    kubectl --context {{ctx}} -n kafka get kafkaconnect,kafkaconnector
+    kubectl --context {{ctx}} -n eurotransit exec orders-db-1 -- psql -d ordersdb -c \
+      "SELECT slot_name, active, pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS lag_bytes FROM pg_replication_slots;"
+
 # ── local debugging (run a service in your IDE against the cluster) ─────────
 
 # tunnel a service's CNPG primary DB to localhost + print the creds for your IDE run config.
@@ -202,6 +245,14 @@ kafka-forward local_port="9092":
     @echo ">> set KAFKA_BOOTSTRAP=localhost:{{local_port}} in your IDE run config"
     @echo ">> forwarding svc/eurotransit-kafka-bootstrap -> localhost:{{local_port}} (Ctrl-C to stop) ..."
     kubectl --context {{ctx}} -n kafka port-forward svc/eurotransit-kafka-bootstrap {{local_port}}:9092
+
+# deploy the Kafka UI dev console (kind/demo only) and expose it via the Traefik Ingress — NO port-forward.
+# Reachable at https://kafka-ui.localhost (auto-resolves to 127.0.0.1; accept the self-signed cert warning).
+# Browse topics, live messages, consumer lag and the *-dlt contents while the saga runs.
+kafka-ui:
+    kubectl --context {{ctx}} apply -f platform/strimzi/kafka-ui.yaml
+    kubectl --context {{ctx}} -n kafka rollout status deploy/kafka-ui --timeout=120s
+    @echo ">> Kafka UI ready: https://kafka-ui.localhost  (self-signed cert — accept the browser warning)"
 
 # ── whole-app local dev (run all 6 services in your IDE, data layer in kind) ─
 # Workflow:  just dev-down   (free the cluster of app pods so they don't fight your local ones)

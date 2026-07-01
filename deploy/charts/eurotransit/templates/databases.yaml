@@ -25,9 +25,10 @@ spec:
   instances: {{ $db.instances }}
   # the Postgres image the operator runs (pinned major version 16)
   imageName: ghcr.io/cloudnative-pg/postgresql:16
-  {{- if $db.synchronous }}
-  # synchronous replication = a commit waits for a standby to confirm -> RPO=0 (no data loss on failover). Only the correctness-critical DBs opt in (see values.yaml)
+  {{- if or $db.synchronous $db.logicalReplication }}
   postgresql:
+    {{- if $db.synchronous }}
+    # synchronous replication = a commit waits for a standby to confirm -> RPO=0 (no data loss on failover). Only the correctness-critical DBs opt in (see values.yaml)
     synchronous:
       # ANY <number> standbys must acknowledge before a write is considered committed
       method: {{ $db.synchronous.method | default "any" }}
@@ -35,6 +36,22 @@ spec:
       # required -> never fall back to async: block writes rather than risk RPO > 0 (CP)
       # preferred -> RPO=0 while standbys are healthy, degrade to async instead of blocking
       dataDurability: {{ $db.synchronous.dataDurability | default "required" }}
+    {{- end }}
+    {{- if $db.logicalReplication }}
+    # Logical decoding for Debezium CDC (the outbox relay reads outbox_events off the WAL). wal_level=logical
+    # is required for pgoutput; the slot/wal-sender counts leave room for the Debezium slot on top of CNPG's
+    # own physical replica slots. max_slot_wal_keep_size is the disk-fill safety valve: if a lagging or wedged
+    # slot pins more than this on the 1Gi PVC, Postgres invalidates the slot (Debezium recreates at the current
+    # LSN, gap backstopped by the orders timeout sweeper) rather than letting the disk fill and crash the DB.
+    # NOTE (PG16): a logical slot lives only on the primary and does NOT fail over to a standby natively
+    # (that is a PG17 feature). On a primary failover (see chaos-05) Debezium re-creates the slot and may miss
+    # the in-flight window; the orders sweeper re-drives any stuck saga, so correctness holds.
+    parameters:
+      wal_level: "logical"
+      max_replication_slots: "10"
+      max_wal_senders: "10"
+      max_slot_wal_keep_size: "512MB"
+    {{- end }}
   {{- end }}
   # CPU/memory per Postgres instance (see values.yaml "databaseResources")
   resources:
@@ -55,6 +72,10 @@ spec:
       - name: {{ $role.name }}
         ensure: present
         login: true
+        {{- if $role.replication }}
+        # REPLICATION attribute: lets this role open a logical replication connection (Debezium CDC)
+        replication: true
+        {{- end }}
         passwordSecret:
           name: {{ $role.secret }}
       {{- end }}

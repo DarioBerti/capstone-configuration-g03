@@ -1,0 +1,46 @@
+# Kafka Connect + Debezium — LOCAL kind variant (single node, RF=1, local-registry image). The prod HA
+# manifest is ../kafka-connect.yaml. Applied out-of-band by `just debezium-kind-apply` (NOT by Argo CD).
+# The connectors in ../connectors/ are shared (they reference in-cluster DNS, identical on kind and prod).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: debezium-connect
+  namespace: kafka
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 4.3.0
+  replicas: 1
+  bootstrapServers: eurotransit-kafka-bootstrap.kafka.svc:9092
+  # built + pushed to the kind local registry by `just debezium-kind-apply`
+  image: localhost:5001/eurotransit/debezium-connect:dev
+  # group.id + internal Connect topics are first-class spec fields in Strimzi v1
+  groupId: debezium-connect
+  offsetStorageTopic: debezium-connect-offsets
+  configStorageTopic: debezium-connect-configs
+  statusStorageTopic: debezium-connect-status
+  config:
+    # single-node kind: RF=1 (matches kafka-kind.yaml)
+    config.storage.replication.factor: 1
+    offset.storage.replication.factor: 1
+    status.storage.replication.factor: 1
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: org.apache.kafka.connect.storage.StringConverter
+    key.converter.schemas.enable: false
+    value.converter.schemas.enable: false
+    # DirectoryConfigProvider reads each mounted secret KEY as its own file: ${directory:<dir>:<key>}
+    config.providers: directory
+    config.providers.directory.class: org.apache.kafka.common.config.provider.DirectoryConfigProvider
+  # Strimzi v1 dropped spec.externalConfiguration; mount the secret via the generic template volumes.
+  template:
+    pod:
+      volumes:
+        - name: debezium-db
+          secret:
+            secretName: debezium-db
+    connectContainer:
+      volumeMounts:
+        # Strimzi v1 requires additional-volume mount paths under /mnt
+        - name: debezium-db
+          mountPath: /mnt/debezium-db
+          readOnly: true

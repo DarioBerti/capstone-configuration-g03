@@ -3,6 +3,8 @@ STABLE track: 1 Deployment + Service per entry in .Values.services.
 The body lives in the reusable "eurotransit.serviceWorkload" template (templates/_workload.tpl) so the
 canary track (canary.yaml) renders from the EXACT same definition — env/probes/resources can never drift.
 */ -}}
+
+{{- /* one iteration per service: $name is the key, $svc is its config object */}}
 {{- range $name, $svc := .Values.services }}
 ---
 {{ include "eurotransit.serviceWorkload" (dict "root" $ "name" $name "svc" $svc "tag" $svc.image.tag) }}

@@ -1,0 +1,122 @@
+# Kafka UI (provectus) — LOCAL kind / demo ONLY. A read-and-browse web console for the async saga:
+# topics, live messages, consumer groups + lag, and the *-dlt dead-letter contents while an order
+# flows reserve-seats -> authorize-payment -> confirm-seats -> capture-payment.
+#
+# This is NOT a GitOps app component: it is never deployed to AKS and Argo CD does not reconcile it.
+# It is a dev convenience applied by `just kafka-ui` and reached at https://kafka-ui.localhost via the
+# Traefik Ingress below — NO port-forward (the *.localhost host auto-resolves to 127.0.0.1 and Traefik
+# binds the node's :443). Fallback if Traefik isn't up: `kubectl -n kafka port-forward svc/kafka-ui 8080:8080`.
+#
+# Pinned to provectuslabs/kafka-ui:v0.7.2 (last stable provectus release; the maintained community
+# fork is kafbat/kafka-ui if a newer build is ever needed). It points at the in-namespace PLAINTEXT
+# bootstrap listener defined in kafka-kind.yaml — no auth/TLS, fine for a single-node laptop cluster.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-ui
+  namespace: kafka
+  labels:
+    app: kafka-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-ui
+  template:
+    metadata:
+      labels:
+        app: kafka-ui
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kafka-ui
+          image: provectuslabs/kafka-ui:v0.7.2
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # one cluster, pointed at the plaintext bootstrap service (see kafka-kind.yaml)
+            - name: KAFKA_CLUSTERS_0_NAME
+              value: eurotransit
+            - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
+              value: eurotransit-kafka-bootstrap.kafka:9092
+            # let the UI edit cluster config at runtime (dev convenience)
+            - name: DYNAMIC_CONFIG_ENABLED
+              value: "true"
+            # cap the heap — the image default can OOM the 1Gi limit on small kind nodes
+            - name: JAVA_OPTS
+              value: "-Xms256m -Xmx512m"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-ui
+  namespace: kafka
+  labels:
+    app: kafka-ui
+spec:
+  type: ClusterIP
+  selector:
+    app: kafka-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Traefik Ingress — same path as the app chart (ingressClassName: traefik + cert-manager selfsigned TLS),
+# so the console is reachable at https://kafka-ui.localhost with no port-forward. kafka-ui.localhost
+# auto-resolves to 127.0.0.1; the browser will warn about the self-signed cert (expected on kind).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kafka-ui
+  namespace: kafka
+  annotations:
+    # cert-manager mints the TLS cert into this namespace via the cluster-scoped selfsigned issuer
+    cert-manager.io/cluster-issuer: selfsigned
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - kafka-ui.localhost
+      secretName: kafka-ui-tls
+  rules:
+    - host: kafka-ui.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kafka-ui
+                port:
+                  number: 8080

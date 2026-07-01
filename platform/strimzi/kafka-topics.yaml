@@ -1,15 +1,22 @@
 # Event topics for the order pipeline (managed by the Strimzi Topic Operator)
 #
-# Partitions enable parallel consumers; replication.factor=3 with min.insync.replicas=2 (set on the cluster) keeps events durable across a broker loss / network partition
+# The saga is an async Kafka command/reply pipeline: Orders is the orchestrator; it emits commands and
+# reacts to replies, while Inventory and Payments consume commands and reply through their own
+# transactional outbox. One topic per command/reply, keyed by orderId.
+#
+# Partitions enable parallel consumers; replication.factor=3 with min.insync.replicas=2 (set on the
+# cluster) keeps events durable across a broker loss / network partition.
 #
 # NOTE: plain manifests applied at platform bootstrap (NOT Helm-templated)
 #
-# Every topic below uses the same shape: partitions=3 (parallelism -> up to 3 consumers per group work in parallel; same key = same partition = per-order ordering) and replicas=3 (one copy per broker, so a broker loss never loses events)
+# Every topic below uses the same shape: partitions=3 (parallelism -> up to 3 consumers per group work in
+# parallel; same key = same partition = per-order ordering) and replicas=3 (one copy per broker, so a
+# broker loss never loses events).
 ---
+# Saga trigger: Orders' outbox publishes it, Orders' saga consumes it ("listen to yourself")
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
-  # the synchronous entry's event: Orders' outbox publishes it, Orders' saga consumes it
   name: order-placed
   namespace: kafka
   labels:
@@ -19,10 +26,11 @@ spec:
   partitions: 3
   replicas: 3
 ---
+# --- Commands: Orders -> Inventory / Payments ---------------------------------------------------------
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
-  name: inventory-reserved
+  name: reserve-seats
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit
@@ -33,7 +41,7 @@ spec:
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
-  name: inventory-released
+  name: authorize-payment
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit
@@ -44,7 +52,7 @@ spec:
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
-  name: payment-authorized
+  name: confirm-seats
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit
@@ -52,6 +60,86 @@ spec:
   partitions: 3
   replicas: 3
 ---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: capture-payment
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+# release-seats (on DECLINED) and cancel-authorization (on EXPIRED) are the saga compensations
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: release-seats
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: cancel-authorization
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+# --- Replies: Inventory / Payments -> Orders (load-bearing, emitted from the outbox) ------------------
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: reservation-result
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payment-result
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: seats-confirmed
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payment-captured
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+# --- Terminal + notify ------------------------------------------------------------------------------
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
@@ -78,6 +166,41 @@ apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: notification-requested
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+# --- Dead-letter topics: one per consuming service. A poison/exhausted-retry message is parked here by
+# the consumer's DefaultErrorHandler + DeadLetterPublishingRecoverer so it never blocks the partition.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: orders-dlt
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: inventory-dlt
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: payments-dlt
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit

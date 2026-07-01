@@ -11,6 +11,9 @@ global:
   # cert-manager's self-signed ClusterIssuer. The browser will warn "not trusted" — expected; the point
   # is to exercise the same TLS plumbing as production.
   clusterIssuer: selfsigned
+  # No log aggregation stack on kind (observability stays disabled), so structured ECS JSON would be
+  # write-only. Empty = human-readable plaintext console, so `kubectl logs` is directly readable (no jq).
+  logFormat: ""
   # Local OIDC: tokens are issued for the kind ingress host (auth.localhost), but the services fetch
   # JWKS / mint service tokens over the in-cluster Service DNS (no ingress/TLS hairpin on a laptop).
   oidc:
@@ -45,6 +48,11 @@ keycloak:
       lastName: Admin
       password: bob
       roles: [USER, ADMIN]
+
+# Local Debezium: render plaintext <db>-debezium role secrets (no kubeseal on a laptop). Prod keeps
+# devSecrets=false and uses committed SealedSecrets.
+debezium:
+  devSecrets: true
 
 # Use locally-built images from the kind local registry (localhost:5001) instead of ACR.
 # Build + push them with `just images-kind`. Base values.yaml keeps the ACR repository for prod.
@@ -89,3 +97,11 @@ frontend:
     repository: localhost:5001/eurotransit/frontend
     tag: dev
     pullPolicy: Always
+
+# `bootstrap-kind` does NOT install the kube-prometheus-stack (lighter laptop footprint — it's an opt-in
+# Step 5 via `just observability-install`). So the ServiceMonitor/PrometheusRule CRDs are absent on a fresh
+# kind cluster and the chart's observability CRs would fail to apply. Disable them here; the app deploys
+# without monitoring wiring. To exercise observability on kind, run `just observability-install` first, then
+# `helm ... --set observability.enabled=true` (or temporarily flip this). Prod keeps it on (base values).
+observability:
+  enabled: false
