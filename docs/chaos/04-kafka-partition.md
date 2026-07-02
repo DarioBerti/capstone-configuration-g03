@@ -34,7 +34,7 @@ checkout_intake:error_ratio:rate5m
 # orders' consumption stops, then catches up (rate -> 0 -> burst -> steady):
 sum(rate(spring_kafka_listener_seconds_count{service="orders"}[1m]))
 # broker-side: the orders group's lag balloons, then drains:
-sum by (topic) (kafka_consumergroup_lag{group="orders"})
+sum by (topic) (kafka_consumergroup_lag{consumergroup="orders"})
 ```
 
 - During: intake 202s keep flowing (k6 error rate ~0); orders freeze in `PENDING`/`RESERVED`; DB check

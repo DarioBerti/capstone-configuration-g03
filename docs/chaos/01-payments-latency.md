@@ -32,7 +32,7 @@ PromQL to watch (Grafana explore or the RED dashboards):
 checkout_intake:error_ratio:rate5m
 histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{uri="/api/orders", method="POST"}[5m])))
 # the failure shows up HERE instead (should grow, then drain):
-sum by (topic) (kafka_consumergroup_lag{group="payments"})             # broker-side lag view
+sum by (topic) (kafka_consumergroup_lag{consumergroup="payments"})             # broker-side lag view
 sum(rate(spring_kafka_listener_seconds_count{service="payments"}[2m])) # payments consumption rate
 ```
 

@@ -39,7 +39,7 @@ experiment of the set: no Chaos Mesh, one command.
 - Orders placed immediately after the poison still reach `CONFIRMED` (the partition moved on).
 ```promql
 sum(rate(spring_kafka_listener_seconds_count{service="inventory", result="failure"}[2m]))  # the burst, then 0
-sum by (topic) (kafka_consumergroup_lag{group="inventory"})                                 # brief blip, then ~0
+sum by (topic) (kafka_consumergroup_lag{consumergroup="inventory"})                                 # brief blip, then ~0
 ```
 
 <screenshots/links>
