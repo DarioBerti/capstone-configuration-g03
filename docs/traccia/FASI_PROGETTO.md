@@ -103,12 +103,19 @@ runbook `platform/argo-rollouts/README.md`.
 - ✅ Validazione precedente del meccanismo manuale su kind (30/06: split 12/12, b/g al colore attivo) +
   **E2E Rollouts su kind** (ramp automatico + abort). La prova live su AKS = parte della demo Fase 6.
 
-## Fase 6 — Chaos + postmortem + demo ⬜
-- ⬜ **5 esperimenti** (report in `docs/chaos/`), **da riscrivere per l'async**: 01 payments-latency (non più
-  "breaker→PAYMENT_PENDING" ma "consumer lento → comando in coda → timeout sweeper/DLT"); 04 kafka-partition
-  (ora **centrale**); pod-kill inventory (never-oversell); node disruption; failover CNPG (RPO=0 **+ CDC riprende**).
-  **Nuovi:** kill worker Kafka Connect (backlog→riparte, verifica HA); demo del canary/blue-green live.
-- ⬜ **Postmortem** blameless + **demo registrata ~5 min** (sistema vivo, dashboard, canary, blue/green, un alert).
+## Fase 6 — Chaos + postmortem + demo 🔄 (runbook riscritti async — resta l'ESECUZIONE)
+- ✅ **Runbook riscritti per l'async (02/07)** — ora **8 esperimenti** (`docs/chaos/`, manifest in
+  `platform/chaos-mesh/`): 01 payments-latency (consumer lento = lag+sweeper, non errori — il rimpiazzo del
+  breaker sotto test); 02 pod-kill inventory (never-oversell sotto redelivery); 03 node disruption; 04
+  kafka-partition (**il centrale**: outage = ritardo, mai corruzione); 05 failover CNPG (RPO=0 **+ CDC
+  riprende** — due posture: PG16 self-healing via sweeper / PG17 failover slots = zero-gap, decisione
+  pendente); **06 kill worker Kafka Connect** (HA del CDC); **07 chaos sul canary → auto-abort Rollouts**
+  (lega F5+F6, candidato demo/postmortem); **08 poison message → DLT** (la claim core del Pilastro C,
+  provata). Traceability test→esperimenti riscritta sui test attuali.
+- ⬜ **Esecuzione live su AKS** (sessione team): run degli 8 in ordine (v. `docs/chaos/README.md`), evidence
+  nelle sezioni Observation, criteri PASS spuntati.
+- ⬜ **Postmortem** blameless (candidato: il 07 come "bad deploy") + **demo registrata ~5 min** (sistema
+  vivo, dashboard, canary auto-abort, un alert).
 
 ---
 
