@@ -64,6 +64,8 @@ spec:
     # ── 3. canary Kafka listener failures ~ 0 (the consumer side no HTTP weight can canary) ──────────
     # A poisoned message legitimately produces a short failure burst (bounded retry -> DLT), so the gate
     # is a small absolute rate, not zero: sustained failures (a consumer-side regression) blow well past it.
+    # Tag scheme: with listener OBSERVATIONS enabled (Fase 4 tracing) the timer carries error="none|<Exception>"
+    # instead of the plain-Micrometer result="success|failure" — verified live on AKS (agent-log #21/#22).
     - name: canary-consumer-failures
       interval: 30s
       failureLimit: 3
@@ -72,7 +74,7 @@ spec:
         prometheus:
           address: {{ $obs.prometheusUrl }}
           query: |
-            sum(rate(spring_kafka_listener_seconds_count{service="{{ $name }}-canary", result="failure"}[2m]))
+            sum(rate(spring_kafka_listener_seconds_count{service="{{ $name }}-canary", error!="none"}[2m]))
             or vector(0)
 {{- end }}
 {{- end }}

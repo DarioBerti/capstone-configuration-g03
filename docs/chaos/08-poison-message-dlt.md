@@ -38,7 +38,7 @@ experiment of the set: no Chaos Mesh, one command.
   (expect `kafka_dlt-exception-*` headers naming the exception and the original topic/partition/offset.)
 - Orders placed immediately after the poison still reach `CONFIRMED` (the partition moved on).
 ```promql
-sum(rate(spring_kafka_listener_seconds_count{service="inventory", result="failure"}[2m]))  # the burst, then 0
+sum(rate(spring_kafka_listener_seconds_count{service="inventory", error!="none"}[2m]))  # the burst, then 0
 sum by (topic) (kafka_consumergroup_lag{consumergroup="inventory"})                                 # brief blip, then ~0
 ```
 

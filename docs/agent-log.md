@@ -493,3 +493,16 @@ mismatches; all were caught by checking each query/option against the thing that
   **Status:** verification step, not yet a confirmed defect — after deploying the app branch, scrape
   `/actuator/prometheus` and check the tag set; if `result` is gone, the gate selector must move to the
   observation tags (PR 16 owner notified).
+
+## 22. Fase 4/5 integration — the listener metric's tag scheme changed under the canary gate (predicted by #21, confirmed live)
+
+Emanuele's #21 flagged the risk; the first AKS deploy of the merged stack confirmed it: enabling listener
+OBSERVATIONS for the cross-Kafka tracing (app PR #10) replaces plain-Micrometer's
+`spring_kafka_listener_seconds{result="success|failure"}` with the Observation convention
+`spring_kafka_listener_seconds{error="none|<ExceptionClass>"}` (plus a separate `_active_` long-task timer).
+The Fase-5 canary analysis gate #3 and chaos runbook 08 still queried `result="failure"` — an always-empty
+query whose `or vector(0)` guard made the gate silently INERT (never aborts, never false-aborts: fail-safe
+but void). **Fix:** queries moved to `error!="none"` (config main, post-merge integration commit).
+**Lesson:** a metric is an API between repos — when an app-side dependency changes an instrumentation mode,
+grep the CONFIG repo for consumers of the affected metric before merging (the two PRs were reviewed
+separately and each was correct in isolation).
