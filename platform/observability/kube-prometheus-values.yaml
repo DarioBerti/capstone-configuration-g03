@@ -1,0 +1,13 @@
+# Helm values for the kube-prometheus-stack install (see justfile `kube-prometheus-install`).
+# Fase 4: ONE deliberate deviation from chart defaults.
+#
+# PodMonitor adoption — by default the chart only adopts PodMonitors labelled `release: kube-prometheus-stack`
+# (podMonitorSelectorNilUsesHelmValues: true). The PodMonitors CNPG generates from `enablePodMonitor: true`
+# carry NO such label (the operator owns them, we can't label them), which is why the cnpg_* metrics never
+# showed up and the CNPG dashboard stayed commented out. Loosen ONLY the PodMonitor selector to adopt all
+# PodMonitors cluster-wide (CNPG DBs + our kafka-exporter / Debezium-Connect monitors, which stay labelled
+# anyway to document intent). ServiceMonitor and PrometheusRule adoption keep the strict release-label
+# convention (values.yaml observability.prometheusRelease) — unchanged.
+prometheus:
+  prometheusSpec:
+    podMonitorSelectorNilUsesHelmValues: false
