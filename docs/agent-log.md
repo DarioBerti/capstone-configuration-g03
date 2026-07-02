@@ -520,3 +520,16 @@ until the app yml drops its stale key — app-repo follow-up). **Lesson:** compl
 same Boot-4 modularization that made the deps inert also renamed the properties; when a majour-version
 framework migration touches observability, validate the SINK receives data, not only that the app "has"
 tracing (in-process evidence like log traceIds proves the tracer, not the pipeline).
+
+## 24. Fase 5 live — the first real AKS canary auto-aborted on a NaN false positive (the mechanism worked, the signal lied)
+
+First template-change rollout on AKS with analysis enabled: the controller aborted at step 0 — weights back
+to 100/0 stable with zero human action, which is the Fase-5 mechanism proven live — but the failed gate was
+a false positive. The success-rate query guards the no-traffic case with `or vector(1)`, which only fires
+when the result is EMPTY (no series). The canary had received a handful of early requests, so its series
+EXISTED; when the smoke token expired mid-ramp (401s land on uri="UNKNOWN", outside the query) the 2m rate
+windows went 0/0 = **NaN — a present sample the vector() guard cannot replace**, and `NaN >= 0.99` is false:
+4 consecutive Failed measurements -> abort. **Fix:** `isNaN(result[0]) || ...` in every successCondition
+(the pattern Argo Rollouts documents for exactly this). **Lesson:** PromQL has TWO distinct "no data"
+shapes — empty vector and NaN sample — and a gate must be immune to both; a canary with no traffic is
+"no evidence of failure", never "failure".

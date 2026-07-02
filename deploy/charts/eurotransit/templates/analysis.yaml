@@ -39,7 +39,11 @@ spec:
       interval: 30s
       # tolerate isolated blips (a single unlucky 30s window must not kill a release)
       failureLimit: 3
-      successCondition: result[0] >= {{ $obs.checkoutSuccessTarget }}
+      # isNaN = the 0/0 window: canary series EXIST but had no samples in the last 2m (e.g. traffic paused
+      # mid-ramp) -> NaN is a present value, the `or vector(1)` no-series guard does NOT fire, and NaN>=x is
+      # always false. No traffic = no evidence of failure = pass (found live on AKS: 4xNaN aborted a healthy
+      # rollout — the abort MECHANISM worked, on a false signal; agent-log #24).
+      successCondition: isNaN(result[0]) || result[0] >= {{ $obs.checkoutSuccessTarget }}
       provider:
         prometheus:
           address: {{ $obs.prometheusUrl }}
@@ -53,7 +57,7 @@ spec:
     - name: canary-intake-ack-p99
       interval: 30s
       failureLimit: 3
-      successCondition: result[0] <= {{ $obs.checkoutAckP99Seconds }}
+      successCondition: isNaN(result[0]) || result[0] <= {{ $obs.checkoutAckP99Seconds }}
       provider:
         prometheus:
           address: {{ $obs.prometheusUrl }}
@@ -69,7 +73,7 @@ spec:
     - name: canary-consumer-failures
       interval: 30s
       failureLimit: 3
-      successCondition: result[0] < 0.1
+      successCondition: isNaN(result[0]) || result[0] < 0.1
       provider:
         prometheus:
           address: {{ $obs.prometheusUrl }}
