@@ -63,7 +63,9 @@ spec:
           for: 5m
           labels:
             severity: page
-            part-of: eurotransit
+            # NB: alert-label NAMES must match [a-zA-Z_][a-zA-Z0-9_]* — a dash ("part-of") is rejected by
+            # the operator's rule validation and voids the WHOLE PrometheusRule (found on first AKS apply)
+            part_of: eurotransit
           annotations:
             summary: "Dead-letter topic {{ $labels.topic }} holds {{ $value }} message(s)"
             description: >-
