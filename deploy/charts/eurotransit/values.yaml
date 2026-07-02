@@ -31,7 +31,6 @@ global:
     issuer: https://auth.g03.cpo2026.it/realms/eurotransit
     jwkSetUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/certs
     tokenUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/token
-
 # Debug SPA hosted IN-CLUSTER (nginx serving the Vite build). DEV/kind convenience so the app can be
 # exercised end-to-end without running services locally; the ingress (gated on the same flag) also adds
 # the SPA's "/" route plus the internal /api/inventory + /api/payments prefixes. OFF in base/prod: the
@@ -45,7 +44,6 @@ frontend:
   replicaCount: 1
   # cluster Service port (nginx listens on 80 inside the pod)
   port: 80
-
 # Keycloak (OIDC identity provider), run by the Keycloak Operator (installed separately as a platform
 # component — see platform/argocd/keycloak-operator-application.yaml). The Keycloak CR + realm import live
 # in THIS chart so they share the eurotransit namespace and the shared catalog Postgres instance.
@@ -61,7 +59,7 @@ keycloak:
   db:
     host: catalog-db-rw.eurotransit.svc
     name: keycloakdb
-    secret: keycloak-db            # keys: username, password (also used by the CNPG managed role)
+    secret: keycloak-db # keys: username, password (also used by the CNPG managed role)
   # secret holding the bootstrap admin user (keys: username, password). MUST NOT be named
   # "<keycloak-cr-name>-initial-admin" (i.e. keycloak-initial-admin): that name is reserved for the
   # secret the operator generates itself, and a collision makes the operator's reconcile 409 and abort.
@@ -85,7 +83,6 @@ keycloak:
   # values-kind.yaml populates it so a fresh kind cluster has ready-to-use logins. Each entry:
   #   { username, email, firstName, lastName, password, roles: [USER|ADMIN ...] }
   testUsers: []
-
 # Per-service desired state
 # "db" references a database name in ".databases" (or null)
 # "criticalPath" marks services on the money path (drives PDBs / spread / stricter SLOs)
@@ -95,7 +92,7 @@ services:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
       repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
-      tag: 22ce722
+      tag: a1d2b2e
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
     # baseline replica count (also the HPA floor / PDB reference)
@@ -119,7 +116,7 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: 22ce722
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -183,7 +180,7 @@ services:
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: 22ce722
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -197,7 +194,7 @@ services:
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: 22ce722
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -211,7 +208,7 @@ services:
   notifications:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/notifications
-      tag: 22ce722
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     # single replica: this service is allowed to be fully down (graceful degradation)
     replicaCount: 1
@@ -225,11 +222,10 @@ services:
     # Allowed to fail entirely (graceful degradation): one replica, no HPA, no PDB
     hpa:
       enabled: false
-
   users:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/users
-      tag: latest
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -246,9 +242,6 @@ services:
       minReplicas: 2
       maxReplicas: 4
       targetCPUUtilizationPercentage: 70
-
-
-
 # CloudNativePG Cluster CRs (operator is platform-level). One DB per data-owning service!
 #
 # Replication posture = our PACELC statement made real: CNPG replicates ASYNCHRONOUSLY by default, which means a failover can lose the last committed transactions (RPO > 0). For inventory that would break "never oversell" exactly under chaos experiment #5 (a committed reservation vanishes, the seat counter rolls back, the seat is sold twice). Hence:
@@ -272,7 +265,6 @@ debezium:
     # dev-only password for the debezium replication role; the kafka-namespace Connect secret created by the
     # `debezium-kind-apply` justfile target uses the SAME value so the login matches. Prod uses sealed secrets.
     dbPassword: debezium-dev-pass
-
 # NOTE: `postgresql.synchronous` requires CloudNativePG >= 1.25
 databases:
   catalog-db:
@@ -286,11 +278,10 @@ databases:
     # a declarative Database on the SAME cluster. Password comes from the keycloak-db secret.
     managedRoles:
       - name: keycloak
-        secret: keycloak-db        # keys: username, password
+        secret: keycloak-db # keys: username, password
     extraDatabases:
       - name: keycloakdb
         owner: keycloak
-
   orders-db:
     # 2 instances: primary + one standby for fast failover
     instances: 2
@@ -305,7 +296,7 @@ databases:
     logicalReplication: true
     managedRoles:
       - name: debezium
-        secret: orders-db-debezium   # basic-auth (username=debezium, password); sealed under deploy/ (ns eurotransit)
+        secret: orders-db-debezium # basic-auth (username=debezium, password); sealed under deploy/ (ns eurotransit)
         replication: true
   inventory-db:
     # 3 instances: survive losing ONE replica without blocking writes (the invariant store)
@@ -332,13 +323,11 @@ databases:
       - name: debezium
         secret: payments-db-debezium
         replication: true
-
   users-db:
     # single instance: profile data is not on the money path and tolerates a short failover
     instances: 1
     database: usersdb
     owner: users
-
 # Default container resources for the services (no CPU limit: avoid throttling spikes; memory limit bounds the JVM blast radius)
 resources:
   # guaranteed share the scheduler reserves
@@ -364,7 +353,6 @@ databaseResources:
     memory: 256Mi
   limits:
     memory: 512Mi
-
 # Observability (Pillar D): what the kube-prometheus-stack should scrape and which SLO alerts to evaluate.
 # Rendered by templates/observability.yaml into one ServiceMonitor per service + the checkout-SLO
 # PrometheusRule. Turn the whole concern off with `enabled: false` — nothing is deleted, the CRs simply
