@@ -5,13 +5,15 @@ then operate the EuroTransit application declared in `deploy/charts/eurotransit`
 
 | Component | Namespace | Role | Source lab |
 |---|---|---|---|
-| **Traefik** | `traefik` | North-south ingress + TLS termination; canary via TraefikService | Lab03 |
+| **Traefik** | `traefik` | North-south ingress + TLS termination; weighted TraefikService = the canary data plane | Lab03 |
 | **cert-manager** | `cert-manager` | ACME/Let's Encrypt certificates for the ingress | Lab03 |
 | **CloudNativePG operator** | `cnpg-system` | Reconciles per-service PostgreSQL `Cluster` CRs | Lab03 |
 | **Strimzi operator** | `kafka` | Reconciles the Kafka cluster + topics for the async pipeline | Capstone |
+| **Debezium (Kafka Connect)** | `kafka` | Log-based CDC: drains each service's outbox off the WAL onto Kafka | Capstone |
 | **Sealed Secrets** | `kube-system` | Encrypts secrets at rest in Git | Lab04 |
 | **Argo CD** | `argocd` | GitOps reconciliation of desired state | Lab04 |
-| **kube-prometheus-stack** | `observability` | Prometheus + Grafana + Alertmanager (RED/USE, SLO alerts) | Lab05 |
+| **Argo Rollouts** | `argo-rollouts` | Progressive delivery controller: SLO-gated canary + blue/green on orders | Capstone |
+| **kube-prometheus-stack** | `monitoring` | Prometheus + Grafana + Alertmanager (RED/USE, SLO alerts) | Lab05 |
 | **Tempo / OTel collector** | `observability` | Distributed tracing backend for the money path | Lab05 |
 | **Chaos Mesh** | `chaos-mesh` | Controlled failure injection for the chaos experiments | Capstone |
 
@@ -23,6 +25,7 @@ Operators are installed once via Helm with an **explicit** chart version (never 
 |---|---|---|---|
 | **Strimzi** | `strimzi/strimzi-kafka-operator` | `1.0.0` | verified 2026-06-28; latest stable (≥0.50.1 fixes CVE-2026-27133/27134) |
 | **CloudNativePG** | `cnpg/cloudnative-pg` | `1.29.1` | ≥1.25 required for `postgresql.synchronous` (inventory/orders RPO=0); pin with `--version 1.29.1` |
+| **Argo Rollouts** | `argo/argo-rollouts` | `2.41.0` (app v1.9.0) | ≥ app v1.7 required for the `--traefik-api-group=traefik.io` flags (Traefik v3) |
 
 Subdirectories hold the per-component bootstrap config:
 
@@ -32,6 +35,7 @@ strimzi/         Kafka cluster CR + KafkaTopic CRs (order-placed, reserve-seats,
 cert-manager/    ClusterIssuers: clusterissuer.yaml (LE staging+prod, AKS) + clusterissuer-kind.yaml (selfsigned, kind)
 traefik/         Traefik install values: values.yaml (base) + values-prod.yaml (LoadBalancer, AKS) + values-kind.yaml (hostPort, kind)
 cloudnativepg/   operator install notes (the per-service Cluster CRs live in the app chart)
+argo-rollouts/   progressive delivery runbook (install, demo commands, GitOps coexistence, async caveat)
 observability/   kube-prometheus-stack values, Tempo/OTel, ServiceMonitors, SLO rules
 chaos-mesh/      chaos experiment manifests (one per hypothesis)
 sealed-secrets/  controller notes + how to seal a secret

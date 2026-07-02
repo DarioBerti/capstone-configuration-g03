@@ -437,3 +437,28 @@ the three cutover agents produced, and how each was caught and resolved — the 
 
 _Add new entries as they happen. Aim well past the required three; every caught mistake is
 evidence of ownership._
+
+## 20. Fase 5 — the agent's manual canary was itself hand-rolled infrastructure, and it missed the consumer-group semantics
+
+Two related misses in the agent-designed first version of Fase 5 (weighted TraefikService with the weight
+edited in `values.yaml`), both caught on 02/07 during the prod-grade re-evaluation:
+
+- **The mechanism violated our own "no hand-rolled infra" rule — and the agent presented it as a virtue.**
+  The manual design was pitched as "GitOps-native canary" (peso = commit, auditabile). Re-examined, the
+  *promotion controller* of that design was a human watching Grafana and committing weight bumps — i.e. the
+  control loop of progressive delivery re-implemented by hand, the same bias class as the polling outbox
+  relay that Debezium replaced (#18-adjacent). No automated analysis meant no reaction to a canary burning
+  error budget at 3am. **Fix:** Argo Rollouts (pinned chart 2.41.0/app v1.9.0): policy in Git (steps, pauses,
+  AnalysisTemplate queries), execution by the controller; every CI tag bump is now an SLO-gated release with
+  automatic abort. **Caught:** team prod-grade audit, not by the agent unprompted.
+- **The agent validated canary + blue/green live without noticing they only govern the HTTP intake.** In the
+  async saga, canary/green pods join the SAME Kafka consumer group as stable: at weight 0 the canary still
+  advances real orders (its listeners consume saga replies), and a full-capacity green consumes ~half the
+  partitions BEFORE the "atomic" switch — so the old docs' "esposizione controllata" / "cutover atomico"
+  claims were silently intake-only, and a state-machine bug in green would touch real orders at 0% traffic.
+  The 30/06 live validation (12/24 split, colour flip) measured exactly what the design promised and so
+  couldn't surface what it didn't promise. **Fix:** documented as a release rule (event compatibility between
+  adjacent versions, design.md §4-D), canary consumer exposure bounded via `setCanaryScale: 1`, and the
+  Rollouts analysis gates on the canary pods' Kafka listener failure rate — the consumer-side signal no HTTP
+  weight can canary. **Lesson:** validating that a mechanism does what its design says is necessary but not
+  sufficient — the graded question is what the design *fails to say*.
