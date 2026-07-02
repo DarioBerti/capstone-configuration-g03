@@ -506,3 +506,17 @@ but void). **Fix:** queries moved to `error!="none"` (config main, post-merge in
 **Lesson:** a metric is an API between repos — when an app-side dependency changes an instrumentation mode,
 grep the CONFIG repo for consumers of the affected metric before merging (the two PRs were reviewed
 separately and each was correct in isolation).
+
+## 23. Fase 4 live — spans created but never exported: Boot 4 renamed the OTLP endpoint property
+
+First AKS run of the merged tracing stack: traceId/spanId present in every ECS log line (tracer active,
+sampling 1.0) yet the collector counted zero received spans and no service logged an export error. Root
+cause: Boot 4 moved the OTLP tracing endpoint from `management.otlp.tracing.endpoint` (the property both the
+app yml and the chart env used) to `management.opentelemetry.tracing.export.otlp.endpoint` — with nothing
+bound there, `OtlpTracingAutoConfiguration` creates NO exporter at all, which is why the failure was silent
+(no exporter = no export attempts = no errors; the classic misconfiguration would at least have produced
+connection-refused noise). **Fix:** the chart now injects the Boot-4 property name (old name kept alongside
+until the app yml drops its stale key — app-repo follow-up). **Lesson:** completes the #21→#22 chain — the
+same Boot-4 modularization that made the deps inert also renamed the properties; when a majour-version
+framework migration touches observability, validate the SINK receives data, not only that the app "has"
+tracing (in-process evidence like log traceIds proves the tracer, not the pipeline).
