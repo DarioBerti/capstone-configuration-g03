@@ -381,6 +381,11 @@ observability:
   checkoutSuccessTarget: "0.99"
   # p99 objective in SECONDS for the synchronous POST /api/orders ack latency. String for the same reason.
   checkoutAckP99Seconds: "0.3"
+  # Fase 4 — saga-completion SLI target: fraction of ACCEPTED orders (202) that must reach a TERMINAL state
+  # (CONFIRMED or REJECTED) within the saga deadline. This is the signal the intake SLO cannot see: after
+  # the async cutover a 202 no longer means the order completed. Terminal — not confirmed — on purpose:
+  # SOLD_OUT / PAYMENT_DECLINED are correct outcomes the saga handled, they must not page anyone.
+  sagaTerminalTarget: "0.99"
   # In-cluster Prometheus URL the Argo Rollouts AnalysisTemplates query (templates/analysis.yaml). The
   # kube-prometheus-stack is installed in namespace `monitoring` (see justfile kube-prometheus-install);
   # service name = <release>-prometheus.

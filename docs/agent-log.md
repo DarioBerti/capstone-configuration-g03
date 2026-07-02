@@ -462,3 +462,34 @@ edited in `values.yaml`), both caught on 02/07 during the prod-grade re-evaluati
   Rollouts analysis gates on the canary pods' Kafka listener failure rate — the consumer-side signal no HTTP
   weight can canary. **Lesson:** validating that a mechanism does what its design says is necessary but not
   sufficient — the graded question is what the design *fails to say*.
+
+## 21. Fase 4 — four contract mismatches caught while implementing the observability additions (02/07)
+
+The Phase-4 handoff doc (agent-assisted) and the two sibling PRs carried four subtle cross-artifact
+mismatches; all were caught by checking each query/option against the thing that actually emits it:
+
+- **PR 17's lag queries use a label the exporter never emits.** The runbooks (exp 01/04/08) query
+  `kafka_consumergroup_lag{group="..."}`, but the Strimzi kafka-exporter's native label is
+  **`consumergroup`** (our own Kafka dashboard uses it correctly). The handoff doc even picked the exporter
+  *"so the runbook queries work"* — they still wouldn't have. **Fix:** metricRelabeling on the exporter
+  PodMonitor copies `consumergroup`→`group` (both selectors resolve, zero extra series) + this note; the
+  runbooks should still be normalized to `consumergroup` in PR 17 review (owner notified).
+- **The handoff doc prescribed a Debezium option that does not exist.** It said to map the trace context via
+  `table.field.event.headers`; the Outbox Event Router has no such option — the real one is
+  **`table.fields.additional.placement: "traceparent:header"`**. Applied verbatim, the connector config
+  would have been silently ignored or rejected. **Caught:** checked against the Debezium EventRouter
+  reference before editing the connectors.
+- **The doc's relabel policy would have corrupted multi-replica series.** It said to drop
+  `pod, instance, endpoint, container` on the app ServiceMonitors. `pod`/`instance` are the only labels
+  distinguishing two replicas of the same service: dropping both collapses their series into one identity →
+  duplicate-sample ingestion errors (orders runs multi-replica + canary). **Fix:** identity labels stay on
+  app monitors; `pod` is dropped ONLY on the kafka-exporter monitor (cluster-level metrics, restart churn);
+  cardinality is enforced by templated `uri`, recording rules and panel grouping (design.md §4-D).
+- **Enabling listener observation (needed for cross-Kafka traces) can silently neuter PR 16's canary gate.**
+  With `spring.kafka.listener.observation-enabled: true`, the `spring.kafka.listener` timer is produced by
+  the Observation API, whose tag set differs from the legacy MicrometerHolder timer (`error="..."` instead of
+  `result="success|failure"`). PR 16's `canary-consumer-failures` gate filters `result="failure"` with an
+  `or vector(0)` fallback — if the tag vanishes the gate would *always pass* and never abort a bad canary.
+  **Status:** verification step, not yet a confirmed defect — after deploying the app branch, scrape
+  `/actuator/prometheus` and check the tag set; if `result` is gone, the gate selector must move to the
+  observation tags (PR 16 owner notified).

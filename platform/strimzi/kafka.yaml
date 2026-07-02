@@ -70,3 +70,19 @@ spec:
   entityOperator:
     topicOperator: {}
     userOperator: {}
+  # Kafka Exporter (Fase 4): broker-side consumer-group lag + per-topic offsets, scraped by Prometheus
+  # via the PodMonitor in monitoring.yaml. This is the metric source the chaos runbooks and the Kafka
+  # dashboard query (kafka_consumergroup_lag, kafka_topic_partition_*_offset) — deliberately the
+  # broker-side exporter and NOT the in-app Micrometer Kafka binder, whose metric has a different name
+  # (kafka_consumer_fetch_manager_records_lag) and only exists while the consumer pod is alive.
+  # After the async cutover lag IS money-path health: it also feeds the DLT-depth alert (offsets delta).
+  kafkaExporter:
+    # watch every group/topic; aggregation discipline happens at query time (by group/topic, never partition)
+    groupRegex: ".*"
+    topicRegex: ".*"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 128Mi

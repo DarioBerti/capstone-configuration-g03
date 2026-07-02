@@ -1,0 +1,73 @@
+# Fase 4 — Prometheus wiring for the Strimzi Kafka Exporter: PodMonitor (scrape) + PrometheusRule
+# (DLT depth). Applied by `just observability-install` (needs the kube-prometheus-stack CRDs; that is why
+# it is NOT applied by kafka-kind-apply). Works identically on kind and prod.
+#
+# Signal roles (see docs/design.md §4-D):
+#   - kafka_consumergroup_lag  → DASHBOARD ONLY (diagnostic: it self-drains once consumers catch up;
+#     paging a human on raw lag violates "alert = human must act"). The saga-completion SLI is what pages.
+#   - DLT depth                → PAGE: a message in a dead-letter topic is an order that failed permanently
+#     and will NOT self-heal until a human intervenes (chaos exp 08 asserts "DLTs empty" as steady state).
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: eurotransit-kafka-exporter
+  namespace: kafka
+  labels:
+    # adopted by the kube-prometheus-stack Prometheus (release-label selector convention)
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: eurotransit
+spec:
+  selector:
+    matchLabels:
+      # the Deployment Strimzi generates for spec.kafkaExporter of the `eurotransit` Kafka CR
+      strimzi.io/name: eurotransit-kafka-exporter
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 15s
+      metricRelabelings:
+        # PR 17's chaos runbooks query kafka_consumergroup_lag{group=...} but the exporter's native label
+        # is `consumergroup` (which our Kafka dashboard uses). Copy it so BOTH selectors resolve — zero
+        # extra series, one extra label. (Mismatch reported to the runbook owner; see docs/agent-log.md.)
+        - sourceLabels: [consumergroup]
+          targetLabel: group
+        # exporter metrics are CLUSTER-level state (lag/offsets), not per-pod state: drop the pod label so
+        # an exporter restart does not double every series under a new pod name. `instance` stays — it is
+        # the series-identity safety net if two exporter pods ever overlap during a rolling update.
+        - action: labeldrop
+          regex: pod
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: eurotransit-kafka-dlt
+  namespace: kafka
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: eurotransit
+spec:
+  groups:
+    - name: eurotransit-dlt
+      rules:
+        # depth of each dead-letter topic = messages ever produced minus messages expired by retention.
+        # Nothing consumes the DLTs, so any positive depth = permanently failed orders sitting there.
+        - record: eurotransit_dlt:depth:sum
+          expr: |
+            sum by (topic) (
+                kafka_topic_partition_current_offset{topic=~".+-dlt"}
+              - kafka_topic_partition_oldest_offset{topic=~".+-dlt"}
+            )
+        - alert: DeadLetterTopicNotEmpty
+          expr: eurotransit_dlt:depth:sum > 0
+          for: 5m
+          labels:
+            severity: page
+            part-of: eurotransit
+          annotations:
+            summary: "Dead-letter topic {{ $labels.topic }} holds {{ $value }} message(s)"
+            description: >-
+              Messages in {{ $labels.topic }} exhausted the bounded consumer retry and will never
+              self-heal: each one is an order that failed permanently. Inspect the DLT record headers
+              (exception + original topic/offset) via Kafka UI, fix the cause, then re-drive or void the
+              affected orders. Steady state (chaos exp 08) is "all DLTs empty".

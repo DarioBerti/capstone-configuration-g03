@@ -64,10 +64,28 @@ Col cutover async, il breaker/bulkhead/retry **sincroni** sono stati **ritirati*
 - ✅ **Dashboard as-code** (RED per servizio + Runtime/golden-signals) caricate in Grafana.
 - ✅ **Fix capacità (PR #9, verificato LIVE 30/06):** CPU requests `100m→50m` (fix di booking) → gli standby CNPG
   schedulano, observability + HA CNPG **coesistono** sui 3× B2s_v2.
-- 🔄 **Tracing distribuito (OTel Collector + Tempo)**: pipeline provata; **le app devono esportare gli span** →
-  **TODO Riccardo** (wiring trace-export su Boot 4 + traceId sugli header Kafka per vedere l'intera pipeline).
-- ⬜ **Da abilitare ora che la saga è Kafka:** dashboard **consumer-lag** + monitoraggio **CDC/Connect** (stato
-  connector, slot) con allarme "connector down / slot che cresce".
+- 🔄 **Tracing cross-Kafka (implementato 02/07, da validare E2E)**: il producer è **Debezium, non la
+  KafkaTemplate** → il contesto W3C si persiste come colonna `traceparent` della riga outbox (stessa tx,
+  branch app `fase-4-tracing`) e l'EventRouter lo mappa a header Kafka
+  (`table.fields.additional.placement`); consumer con `listener.observation-enabled`. Da validare su kind:
+  una traccia unica orders→inventory→payments in Tempo. ⚠️ verifica post-deploy: il tag `result` di
+  `spring_kafka_listener_seconds` può cambiare con l'observation → gate `canary-consumer-failures` di
+  Fase 5 da ricontrollare (v. agent-log #21).
+- ✅ **Consumer-lag + DLT + CDC monitoring (02/07, branch `fase-4-observability`)**: kafka-exporter sui due CR
+  Kafka + PodMonitor (`platform/strimzi/monitoring.yaml`, label `group` clonata da `consumergroup` per i
+  runbook Fase 6); JMX Connect/Debezium (`platform/debezium/connect-metrics.yaml` + `monitoring.yaml`) con
+  alert **connector non-RUNNING / metriche assenti / slot perso-inattivo-WAL>256Mi** (lega al chaos #5/#6);
+  **DLT depth** con page `DeadLetterTopicNotEmpty`; dashboard kafka+cnpg s-commentate (adozione PodMonitor
+  CNPG via `kube-prometheus-values.yaml`).
+- ✅ **SLI di completamento saga (02/07)**: `checkout_saga:terminal_ratio:rate30m` (terminal, non confirmed:
+  SOLD_OUT/DECLINED sono esiti corretti) + gauge `orders_overdue_nonterminal` dallo sweeper; 2 alert page
+  nel gruppo `eurotransit-saga-slo` del chart; riga saga sulla dashboard RED. Contatori app su
+  `fase-4-tracing` (`orders_confirmed_total`/`orders_rejected_total{reason}`).
+- ✅ **Cardinalità + sampling (02/07)**: policy in design.md §4-D (uri templated, mai per-partizione/per-pod,
+  doppio-scrape a riposo → pannelli throughput in vista stable; identity label NON droppate);
+  `tail_sampling` sul Collector gateway (immagine contrib: errori+lenti al 100%, resto 10%).
+- ⬜ **Ultima miglia correlazione (#8, rimandata)**: datasource Tempo in Grafana + exemplar (metric↔trace);
+  Loki opzionale (i log ECS portano già traceId/spanId).
 
 ## Fase 5 — Progressive delivery ✅ (Argo Rollouts — canary SLO-gated + blue/green)
 **D9 chiusa (02/07): Argo Rollouts** al posto del peso manuale (quello = "controller umano su Grafana" =

@@ -235,7 +235,9 @@ debezium-kind-apply:
       --from-literal=inventory-password=debezium-dev-pass \
       --from-literal=payments-password=debezium-dev-pass \
       --dry-run=client -o yaml | kubectl --context {{ctx}} apply -f -
-    # Connect cluster (kind variant) + the shared connectors
+    # JMX->Prometheus rules ConfigMap FIRST (the Connect CR's metricsConfig references it; on prod Argo
+    # applies it, on kind we must), then the Connect cluster (kind variant) + the shared connectors
+    kubectl --context {{ctx}} apply -f platform/debezium/connect-metrics.yaml
     kubectl --context {{ctx}} apply -f platform/debezium/kind/kafka-connect-kind.yaml
     kubectl --context {{ctx}} apply -f platform/debezium/connectors/
     echo ">> waiting for the Debezium connectors to become Ready ..."
@@ -415,7 +417,8 @@ kube-prometheus-install:
     helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
     helm repo update prometheus-community
     helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-      --namespace monitoring --create-namespace --wait
+      --namespace monitoring --create-namespace --wait \
+      -f platform/observability/kube-prometheus-values.yaml
 
 # deploy the OpenTelemetry Collector gateway + Grafana Tempo, then the dashboards-as-code ConfigMaps
 observability-install: kube-prometheus-install
@@ -427,6 +430,11 @@ observability-install: kube-prometheus-install
       --namespace observability --create-namespace \
       -f platform/observability/tempo-values.yaml --wait
     kubectl --context {{ctx}} apply -k platform/observability/dashboards/
+    # Fase 4 — PodMonitors + infra alert rules (kafka-exporter lag/DLT, Debezium/Connect CDC). Applied here
+    # because the PodMonitor/PrometheusRule CRDs only exist after kube-prometheus-install; on prod the
+    # debezium one is also reconciled by Argo (same manifest, idempotent).
+    kubectl --context {{ctx}} apply -f platform/strimzi/monitoring.yaml
+    kubectl --context {{ctx}} apply -f platform/debezium/monitoring.yaml
     @echo ">> verify: kubectl -n eurotransit get servicemonitor,prometheusrule  (Prometheus UI -> Targets/Rules)"
 
 # verify adoption: our ServiceMonitors/PrometheusRule exist and (best-effort) the stack pods are up
