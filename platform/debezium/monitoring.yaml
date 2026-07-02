@@ -52,7 +52,7 @@ spec:
           for: 2m
           labels:
             severity: page
-            part-of: eurotransit
+            part_of: eurotransit
           annotations:
             summary: "CDC connector {{ $labels.connector }} is {{ $labels.status }}"
             description: >-
@@ -67,7 +67,7 @@ spec:
           for: 5m
           labels:
             severity: page
-            part-of: eurotransit
+            part_of: eurotransit
           annotations:
             summary: "No CDC connector metrics are being scraped"
             description: >-
@@ -84,7 +84,7 @@ spec:
           for: 2m
           labels:
             severity: page
-            part-of: eurotransit
+            part_of: eurotransit
           annotations:
             summary: "A Debezium replication slot is missing (found fewer than 3 *_outbox slots)"
             description: >-
@@ -98,7 +98,7 @@ spec:
           for: 5m
           labels:
             severity: page
-            part-of: eurotransit
+            part_of: eurotransit
           annotations:
             summary: "Replication slot {{ $labels.slot_name }} exists but has no consumer"
             description: >-
@@ -110,7 +110,7 @@ spec:
           for: 10m
           labels:
             severity: page
-            part-of: eurotransit
+            part_of: eurotransit
           annotations:
             summary: "Slot {{ $labels.slot_name }} is retaining {{ $value | humanize1024 }}B of WAL"
             description: >-
