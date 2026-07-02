@@ -113,6 +113,40 @@ spec:
                   name: {{ .svc.oidcClient.secretName }}
                   key: client-secret
             {{- end }}
+            {{- if dig "paypal" "enabled" false .svc }}
+            {{- /* Payments -> PayPal (sandbox) server-to-server PSP. provider flips the app off the mock; base-url
+                   is non-secret; the client-id/secret + sandbox test card come from the `paypal-api` secret
+                   (a committed SealedSecret in prod, or the paypal.devSecrets-gated plaintext on kind). */}}
+            - name: PAYMENTS_PROVIDER
+              value: "paypal"
+            - name: PAYPAL_BASE_URL
+              value: {{ .svc.paypal.baseUrl | quote }}
+            - name: PAYPAL_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .svc.paypal.secretName }}
+                  key: client-id
+            - name: PAYPAL_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .svc.paypal.secretName }}
+                  key: client-secret
+            - name: PAYPAL_TEST_CARD_NUMBER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .svc.paypal.secretName }}
+                  key: test-card-number
+            - name: PAYPAL_TEST_CARD_EXPIRY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .svc.paypal.secretName }}
+                  key: test-card-expiry
+            - name: PAYPAL_TEST_CARD_CVV
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .svc.paypal.secretName }}
+                  key: test-card-cvv
+            {{- end }}
             {{- if .svc.db }}
             {{- /* DB_* from the <db>-app Secret CNPG generates (creds never in Git). Canary shares the SAME db. */}}
             - name: DB_HOST

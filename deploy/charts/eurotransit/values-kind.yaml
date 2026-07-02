@@ -54,6 +54,24 @@ keycloak:
 debezium:
   devSecrets: true
 
+# Local PayPal (sandbox): render a plaintext `paypal-api` secret (no kubeseal on a laptop) from the values
+# below. Payments stays on the MOCK PSP by default (services.payments.paypal.enabled:false above); to test the
+# real sandbox PSP on kind, paste your sandbox REST-app credentials + a sandbox test card here and flip
+# services.payments.paypal.enabled:true. Prod keeps devSecrets=false and a committed SealedSecret.
+paypal:
+  devSecrets: true
+  dev:
+    clientId: AQBbj5g_DvK-elKzcJRCKoE57IiYpX2D-2dMYzWNdJFCLJPKNEREL9p9M1biqv5snZeBETXjHBAYhuTf
+    clientSecret: EM4SRKJ7Ox6PH2xywx4f58IJ_-E4HLcOVRJDmTPDBo-KC7fcCH8OWrAR8cHXTyv65Xu9SGBNfXsg8Osx
+    testCard:
+      # Must be a FRICTIONLESS (non-3DS) sandbox card: the server-to-server flow has no buyer, so a
+      # card that triggers 3D Secure comes back PAYER_ACTION_REQUIRED (no authorization id) and the
+      # authorize step throws → retries → DLT. 4111…1111 authorizes+captures with no payer action.
+      # (4020022377146800 and 4000000000000002 both force 3DS and must NOT be used here.)
+      number: "4111111111111111"   # quote it: an unquoted 16-digit number renders as a float (scientific notation)
+      expiry: "2031-07"            # PayPal wants YYYY-MM (any future month)
+      cvv: "123"
+
 # Use locally-built images from the kind local registry (localhost:5001) instead of ACR.
 # Build + push them with `just images-kind`. Base values.yaml keeps the ACR repository for prod.
 # pullPolicy: Always so a rebuilt :dev image is re-pulled on the next pod restart (dev loop).
@@ -78,6 +96,10 @@ services:
       repository: localhost:5001/eurotransit/payments
       tag: dev
       pullPolicy: Always
+    # kind default: keep payments on the in-app MOCK PSP so `just app-deploy` needs no PayPal credentials. To
+    # exercise the REAL PayPal sandbox on kind: fill paypal.dev.* (below) and flip this to true.
+    paypal:
+      enabled: true
   notifications:
     image:
       repository: localhost:5001/eurotransit/notifications

@@ -20,12 +20,15 @@ spec:
   roles:
     - controller
     - broker
+  # Memory: keep a 512m heap but give the container generous off-heap headroom. Kafka needs far more
+  # than the heap at runtime (network/direct buffers, mmap'd log segments, GC, metaspace); a 1Gi limit
+  # left only ~512Mi for all of that and the broker was OOMKilled (137) under saga + Debezium load.
   resources:
     requests:
       cpu: 250m
-      memory: 768Mi
-    limits:
       memory: 1Gi
+    limits:
+      memory: 2Gi
   jvmOptions:
     -Xms: 512m
     -Xmx: 512m
