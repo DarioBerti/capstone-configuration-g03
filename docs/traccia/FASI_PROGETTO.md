@@ -18,8 +18,8 @@ Legenda: ✅ fatto · 🔄 in corso · ⬜ da fare
  Fase 1  Core money path        ✅   ← 6 servizi; saga ora ASYNC Kafka command/reply + outbox
  Fase 2  Resilienza             🔄   ← edge @RateLimiter (429) + DLT/retry async OK; breaker/bulkhead da ri-collocare
  Fase 3  Piattaforma su cluster ✅   ← verificata su AKS; + Debezium (Kafka Connect 3 repliche, CNPG logical)
- Fase 4  Observability          🔄   ← metriche+SLO+dashboard validate LIVE; resta tracing (Riccardo) + CDC/lag monitoring
- Fase 5  Progressive delivery   ✅   ← Argo Rollouts: canary SLO-gated (abort automatico) + blue/green
+ Fase 4  Observability          ✅   ← VALIDATA LIVE su AKS 03/07: lag+CDC+DLT+SLI saga+tracing cross-Kafka E2E
+ Fase 5  Progressive delivery   ✅   ← Argo Rollouts VALIDATO su AKS 03/07: ramp 3 gate×19 ok + abort automatico
  Fase 6  Chaos + postmortem     ⬜   ← 5 esperimenti (da riscrivere per l'async) + postmortem + demo
 ```
 
@@ -58,7 +58,16 @@ Col cutover async, il breaker/bulkhead/retry **sincroni** sono stati **ritirati*
 - ⬜ **Nota aperta:** lo slot logico Debezium non fa failover nativo su PG → dopo un failover CNPG il CDC va
   ripristinato (mitigazione + verifica nel chaos #5).
 
-## Fase 4 — Observability 🔄 (core validato LIVE; resta tracing + CDC monitoring)
+## Fase 4 — Observability ✅ (VALIDATA LIVE su AKS 03/07 — stack completo)
+> **Validazione live 03/07** (post-merge PR #16/#17/#18 config + #10/#11 app, primo deploy async su AKS):
+> money path async **CONFIRMED end-to-end** (120 CONFIRMED + 49 REJECTED=SOLD_OUT: never-oversell live, posti
+> esauriti → rifiuti puliti); Debezium **3 connector RUNNING** (immagine Connect ora buildata dalla CI);
+> `kafka_consumergroup_lag` (exporter), CDC (`debezium_metrics_*`), DLT depth=0, SLI saga (placed=confirmed),
+> 4 gruppi di rule caricati; **traccia cross-Kafka in Tempo**: orders+inventory+notifications nella STESSA
+> traccia (traceparent via outbox→Debezium header, 2 hop). Fix live committati: label `part_of` (2 rule
+> respinte dal webhook), property OTLP **Boot 4** (`management.opentelemetry.tracing.export.otlp.endpoint` —
+> senza, zero span esportati), gate analysis NaN-proof, Strimzi 1.0.0→**1.1.0** su AKS (Kafka 4.3.0),
+> right-size memoria Keycloak (1700Mi→700Mi). V. agent-log #22-#24.
 - ✅ **Metriche+SLO+alert**: kube-prometheus adotta le nostre ServiceMonitor (validato LIVE su AKS 29/06); rule
   `eurotransit-checkout-slo` (success-rate intake ≥99% + ack p99, burn-rate multi-finestra; 429 non è errore; mai su CPU).
 - ✅ **Dashboard as-code** (RED per servizio + Runtime/golden-signals) caricate in Grafana.
@@ -87,7 +96,10 @@ Col cutover async, il breaker/bulkhead/retry **sincroni** sono stati **ritirati*
 - ⬜ **Ultima miglia correlazione (#8, rimandata)**: datasource Tempo in Grafana + exemplar (metric↔trace);
   Loki opzionale (i log ECS portano già traceId/spanId).
 
-## Fase 5 — Progressive delivery ✅ (Argo Rollouts — canary SLO-gated + blue/green)
+## Fase 5 — Progressive delivery ✅ (Argo Rollouts — VALIDATO LIVE SU AKS 03/07)
+> **Su AKS**: migrazione Deployment→Rollout live; primo ramp reale 5→25→50→100 **gated dall'analysis su
+> Prometheus** (3 gate × 19 misurazioni Successful sotto traffico); **abort automatico dimostrato** (peso a 0
+> senza intervento umano — su un falso positivo NaN, poi fixato: gate ora NaN-proof, agent-log #24).
 **D9 chiusa (02/07): Argo Rollouts** al posto del peso manuale (quello = "controller umano su Grafana" =
 delivery-infra fatta a mano, stessa categoria del relay outbox pre-Debezium). Dettaglio `docs/design.md §4-D`,
 runbook `platform/argo-rollouts/README.md`.
