@@ -12,6 +12,11 @@ The **Outbox Event Router** SMT reproduces the exact pre-CDC wire format, so **c
 | topic | `topic` column | `route.by.field=topic` → e.g. `reserve-seats`, `payment-result` |
 | key   | `aggregate_id` column | the orderId → per-order partition ordering |
 | value | `payload` column | raw JSON string, `StringConverter` → byte-identical to the old producer |
+| header `traceparent` | `traceparent` column | Fase 4: W3C trace context saved by the app in the outbox row (same tx); `table.fields.additional.placement=traceparent:header`. NULL column (e.g. sweeper re-drive) → no usable header, the consumer starts a fresh trace. Consumers continue it via `spring.kafka.listener.observation-enabled`. **Deploy order: the app migration adding the column must land BEFORE this connector config.** |
+
+CDC health is scraped via `connect-metrics.yaml` (JMX rules) + `monitoring.yaml` (PodMonitor + the
+`eurotransit-cdc` alerts: connector not RUNNING, metrics absent, replication slot missing/inactive/retaining
+WAL — the slot alerts are the proof hook for chaos exp 05).
 
 ## Pieces
 
