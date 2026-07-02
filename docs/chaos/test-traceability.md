@@ -1,35 +1,33 @@
-# Test → chaos-experiment traceability (Fase 2 #5.6)
+# Test → chaos-experiment traceability
 
 Two levels of the **same** proof. The in-process **functional tests** (`capstone-application-g03/services/*/src/test`)
-are **level 1** — fast, deterministic, run on every CI build. The **Chaos Mesh experiments** (manifests *planned* under
+are **level 1** — fast, deterministic, run on every CI build. The **Chaos Mesh experiments** (manifests under
 `platform/chaos-mesh/`, reports `NN-name.md` in this directory) are **level 2** — the same hypothesis reproduced on the
-real cluster under exactly one injected infrastructure failure. *"Resilience is a property you prove, not assume"*
-(deck 11, slide 41).
+real cluster under exactly one injected infrastructure failure. *"Resilience is a property you prove, not assume."*
 
 **How to read a row.** If the level-1 test is green we *predict* the chaos run holds for the same reason. A **red** chaos
 result with a **green** unit test localises the gap to the **environment** (wiring / infra / config), not the domain logic.
-Experiment ids `01..05` are fixed by [`README.md`](README.md); this doc invents none. Each level-1 test also carries a
-JUnit `@Tag("chaos-NN")` so CI can later select a per-experiment suite (`--tests`/tag filter) once the manifests exist.
+Experiment ids `01..08` are fixed by [`README.md`](README.md). Level-1 tests carry a JUnit `@Tag("chaos-NN")` where a
+direct counterpart exists.
+
+> Rewritten for the **async saga** (2026-07-02): the sync-era rows mapped breaker/bulkhead/relay tests
+> (`PaymentsCircuitBreakerTest`, `BulkheadIsolationTest`, `OutboxPublisherTest`, …) that were retired with the cutover.
 
 ## Map
 
-| # | Experiment (planned manifest) | Level-1 functional test(s) — `@Tag` | Shared hypothesis (level-1 proves ⇒ level-2 must hold) |
+| # | Experiment | Level-1 functional test(s) | Shared hypothesis (level-1 proves ⇒ level-2 must hold) |
 |---|---|---|---|
-| **01** | `payments-latency` — breaker opens, fallback engages, Catalog healthy | `PaymentsCircuitBreakerTest`, `PaymentsGatewayBreakerIntegrationTest`, `PaymentsRetryTest`, `PaymentsRetryIntegrationTest`, `BulkheadIsolationTest`, `OrderRecoverySweeperTest`, `OrderSagaTest` (parking methods) — `@Tag("chaos-01")` | Sustained Payments latency makes >50% of the window **slow** → the breaker **OPENs** and fast-fails (`CallNotPermittedException`); a **short blip** is absorbed by bounded retry+jitter and never trips it; the fallback **parks** the order (`PAYMENT_PENDING`) instead of propagating, seats stay held, and the recovery sweep confirms once Payments heals. The per-downstream **bulkhead** stops the latency starving Inventory, so Catalog browsing stays healthy. |
-| **02** | `inventory-podkill` — no oversell / no double-charge mid-reservation | `InventoryConcurrencyTest`, `PaymentsServiceTest`, `PaymentsRetryIdempotencyIntegrationTest`, `OrderSagaTest` (compensation methods) — `@Tag("chaos-02")` | A pod killed mid-reservation triggers Kafka **at-least-once redelivery** and concurrent drivers. Atomic conditional `UPDATE` + `UNIQUE(order_id[,product_id])` + `@Version` make a redelivered reserve/authorize/void an **idempotent replay**: never oversell, never a second charge (proven build-breaking by `PaymentsRetryIdempotencyIntegrationTest`: a charge that commits then loses its response is retransmitted and still charges once). If a hold lapses post-authorize the saga **VOIDs before rejecting** ("no charge without a seat"). |
-| **03** | `node-disruption` — PDBs + topology spread keep the critical path available | `OrderVersionConcurrencyTest`, `OrdersIntakeRateLimiterTest` — `@Tag("chaos-03")` | Losing a node leaves multiple replicas + the sweeper running on survivors. Concurrent **terminal** transitions emit exactly **one** `order-confirmed` + one `notification-requested` (optimistic-lock losers roll back). Under reduced capacity the intake **sheds** `429 + Retry-After` (controlled refusal) instead of collapsing, keeping survivors responsive. |
-| **04** | `kafka-partition` — pipeline converges after heal; nothing lost/duplicated | `OutboxPublisherTest` (+ the idempotent consumers above) — `@Tag("chaos-04")` | A broker partition stops delivery; on heal the **transactional outbox** re-drains in creation order and marks each event once, and every consumer is idempotent, so the async pipeline converges with **nothing lost and nothing duplicated**. |
-| **05** | `pg-failover` — checkout impact + recovery within RTO | *(no direct in-process counterpart — pure infra)* nearest analogs: `OrderSagaTest` parking + `OrderRecoverySweeperTest` (`chaos-01`) | A primary failover surfaces to the app as **transient transport faults** on in-flight DB work; those map to the breaker/park path proven at level 1, so checkout degrades to `PAYMENT_PENDING` and the recovery sweep drains once the new primary is up. The RTO itself (`slo.md`, recover-to-SLO target) is an infra property only the cluster experiment can measure. |
-
-## Not anticipating a chaos experiment (intentionally)
-- `RetryBulkheadConfigTest`, `OrdersApplicationTests`, and `PaymentsCircuitBreakerTest`'s **config-assertion** method **pin
-  `application.yml` bindings** (non-default thresholds). They guard that the policies are *wired*, not that they survive a
-  failure — there is no infra fault to inject, so they carry no `@Tag`.
-- `PaymentsGateway4xxTest` exercises a **business/contract** outcome (4xx → terminal `DECLINED`, breaker **not** tripped),
-  not an injected infra failure. It is a **control** for experiment 01: it proves a business decline is not mistaken for the
-  latency fault the breaker watches.
+| **01** | `payments-latency` — slow consumer never reaches the user | `OrderTimeoutSweeperTest`, `OrderSagaTest` (guarded transitions), `PaymentsServiceTest` (idempotent authorize) | A slow Payments consumer just delays `payment-result`; orders park in `RESERVED`; the sweeper re-drives past PT2M and `UNIQUE(order_id)` makes the re-driven authorize a no-op → no double-charge, no stuck order, intake untouched (the ack never waits on Payments). |
+| **02** | `inventory-podkill` — never-oversell under kill + redelivery | `InventoryConcurrencyTest` (last-seat race), `InventoryListenerIdempotencyTest` (redelivered command = no-op replay + reply re-emitted) | A pod killed mid-command is redelivered at-least-once (offset uncommitted); the atomic conditional `UPDATE` + `UNIQUE(order_id, trip_code)` converge to exactly one reservation outcome; the re-emitted `reservation-result` keeps Orders moving. |
+| **03** | `node-disruption` — PDB + spread keep the money path up | `OrderVersionConcurrencyTest` (concurrent drivers → one terminal outcome), `OrdersIntakeRateLimiterTest` (429 shed under reduced capacity) | Survivors absorb the displaced load: concurrent terminal transitions emit exactly one `order-confirmed` (optimistic-lock losers roll back benignly); under pressure the intake sheds 429+Retry-After instead of collapsing. |
+| **04** | `kafka-partition` — the saga freezes, converges on heal (CENTRAL) | `OrderSagaTest` (reply-driven guarded transitions), `OrderTimeoutSweeperTest` (re-drive), `InventoryListenerIdempotencyTest` + `PaymentCommandListenersTest` (idempotent consumers) | Unconsumed messages are delay, not loss (manual ack); on heal every guarded, idempotent transition applies exactly once; the sweeper re-drives whatever crossed the deadline; nothing lost, nothing duplicated. |
+| **05** | `pg-failover` — RPO=0 **+ CDC resumes** | *(data part: pure infra — sync replication)*; CDC-gap self-healing maps to `OrderTimeoutSweeperTest` + the idempotent-consumer tests above | The failover surfaces as transient DB faults + a dead replication slot; the sweeper's re-drive generates fresh outbox rows on the new primary, closing the CDC gap for the money path. RPO/RTO themselves only the cluster can measure. |
+| **06** | `connect-worker-kill` — CDC HA (3 workers) | *(pure infra — Connect group rebalance; no in-process counterpart)* consumers' dedup covers the at-least-once re-read | A worker death loses no position (slot LSN in PG, offsets in Kafka); at worst it re-reads unconfirmed WAL, which the idempotent consumers absorb. |
+| **07** | `canary-auto-abort` — Rollouts aborts a bad release on the SLO gates | `OrdersIntakeRateLimiterTest` + `MetricCardinalityGuardTest` (the intake metrics the analysis queries exist and are well-formed); `OrdersControllerTest` (the ack path under test) | The analysis gates read the same `http_server_requests` + `spring_kafka_listener` series the tests pin; a degraded canary trips the p99 gate → the controller aborts with no human action. |
+| **08** | `poison-message-dlt` — bounded retry → per-service DLT, no head-of-line blocking | `InventoryListenerIdempotencyTest` / `PaymentCommandListenersTest` (listener error path), the `KafkaErrorHandler` wiring (DefaultErrorHandler + FixedBackOff + DeadLetterPublishingRecoverer) asserted by context load | A message that keeps failing is retried 3×500 ms then dead-lettered and the offset committed — the partition moves on; the DLT carries the diagnostic headers. |
 
 ## Keeping this honest
-When an experiment report (`01`..`05`) is written, link back to its row here. If a chaos run fails while its mapped
+When an experiment report (`01`..`08`) is written, link back to its row here. If a chaos run fails while its mapped
 level-1 test is green, record in the report that the divergence is **environmental** (level-2 only) — that localisation is
-the whole point of maintaining both levels.
+the whole point of maintaining both levels. If a mapped test is renamed/retired in the app repo, update the row (this
+file already survived one such rewrite: the sync→async cutover).

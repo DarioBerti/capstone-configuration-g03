@@ -1,13 +1,15 @@
 # Chaos experiment 04 — network partition Orders <-> Kafka (runbook: docs/chaos/04-kafka-partition.md).
 #
-# Goal: prove the transactional outbox + idempotent consumers lose/duplicate nothing. During the partition
-# POST /api/orders still returns 202 (order + outbox row commit locally); the outbox relay retries publishing
-# after the heal (at-least-once); UNIQUE dedup absorbs any redelivery -> the system converges.
+# Goal (async saga — THE central experiment): prove a Kafka outage delays the saga but never corrupts or
+# loses it. During the partition POST /api/orders still returns 202 durably (order + outbox row commit in
+# PG); Debezium (kafka ns, NOT partitioned) keeps publishing the outbox and the siblings keep replying —
+# what stops is Orders CONSUMING. On heal Orders drains the backlog (manual ack = nothing lost), the sweeper
+# re-drives anything parked past PT2M, and UNIQUE dedup absorbs the re-drives -> the system converges.
 #
 # RUN for ~3 min under steady load, then let it heal (auto-revert via `duration`):
 #   kubectl apply -f platform/chaos-mesh/04-kafka-partition.yaml
-#   # OBSERVE during: outbox `published_at IS NULL` backlog grows, intake still 202
-#   # OBSERVE after:  backlog drains, consumer lag -> ~0, each order reaches exactly one terminal state
+#   # OBSERVE during: intake still 202; orders group's consumer lag balloons (outbox stays ~drained: Debezium is NOT cut)
+#   # OBSERVE after:  lag -> ~0, each order reaches exactly one terminal state, no duplicates
 #   kubectl delete -f platform/chaos-mesh/04-kafka-partition.yaml
 apiVersion: chaos-mesh.org/v1alpha1
 kind: NetworkChaos

@@ -1,13 +1,15 @@
 # Chaos experiment 01 — latency injection into Payments (runbook: docs/chaos/01-payments-latency.md).
 #
-# Goal: prove the Orders->Payments circuit breaker OPENs and fast-fails to the PAYMENT_PENDING
-# fallback, while Catalog browsing stays healthy (bulkhead isolation) and the intake ack SLO holds
-# (the slow call is off the request thread).
+# Goal (async saga): prove a SLOW CONSUMER never becomes a user-facing failure. Delaying the Payments<->Kafka
+# path slows its consumption of authorize/capture commands and the publication of its replies: the failure
+# surfaces as consumer lag + orders parked in RESERVED, while the intake ack SLO stays green (the slow step
+# is behind Kafka, not on the request thread) and the sweeper re-drives anything parked past PT2M.
+# This is the async replacement of the retired Orders->Payments circuit breaker, under test.
 #
 # MANUAL experiment, NOT GitOps: this file lives under platform/ (Argo reconciles only deploy/charts/),
 # so it never auto-applies. Run it by hand, observe, then delete it:
 #   kubectl apply -f platform/chaos-mesh/01-payments-latency.yaml
-#   # ...watch breaker state / dashboards under load for ~5 min...
+#   # ...watch intake SLIs (flat) + payments consumer lag (grows, then drains) under k6 load for ~5 min...
 #   kubectl delete -f platform/chaos-mesh/01-payments-latency.yaml   # (auto-stops after `duration` anyway)
 apiVersion: chaos-mesh.org/v1alpha1
 kind: NetworkChaos
@@ -16,16 +18,22 @@ metadata:
   namespace: eurotransit
 spec:
   action: delay
-  # `all` = hit every Payments replica, so the breaker sees the latency regardless of which pod serves the call.
+  # `all` = every Payments replica, so the lag builds regardless of which pod owns the partitions.
   mode: all
   selector:
     namespaces: [eurotransit]
     labelSelectors:
       # the stable chart label (templates/_helpers.tpl: app.kubernetes.io/name), NOT the `app=` shorthand
       app.kubernetes.io/name: payments
-  # `to` delays traffic entering the Payments pods (the request leg). ~3 s comfortably exceeds the breaker's
-  # slow-call duration threshold, so a few calls trip it to OPEN — which is exactly the behaviour under test.
-  direction: to
+  # delay BOTH legs of the Payments<->Kafka conversation: fetching commands AND producing replies.
+  direction: both
+  # the other side: the Strimzi broker pods only — Payments' DB path stays untouched (one variable).
+  target:
+    mode: all
+    selector:
+      namespaces: [kafka]
+      labelSelectors:
+        strimzi.io/cluster: eurotransit
   delay:
     latency: "3s"
     jitter: "200ms"
