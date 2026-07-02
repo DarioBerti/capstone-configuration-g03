@@ -1,11 +1,12 @@
 {{- /*
-STABLE track: 1 Deployment + Service per entry in .Values.services.
-The body lives in the reusable "eurotransit.serviceWorkload" template (templates/_workload.tpl) so the
-canary track (canary.yaml) renders from the EXACT same definition — env/probes/resources can never drift.
+1 workload + Service per entry in .Values.services. The body lives in the reusable
+"eurotransit.serviceWorkload" template (templates/_workload.tpl): a plain Deployment normally, an Argo
+Rollout when the service carries a `rollout.strategy` (Fase 5 progressive delivery on the money path) —
+same pod template either way, so the two shapes can never drift.
 */ -}}
 
 {{- /* one iteration per service: $name is the key, $svc is its config object */}}
 {{- range $name, $svc := .Values.services }}
 ---
-{{ include "eurotransit.serviceWorkload" (dict "root" $ "name" $name "svc" $svc "tag" $svc.image.tag) }}
+{{ include "eurotransit.serviceWorkload" (dict "root" $ "name" $name "svc" $svc "tag" $svc.image.tag "rollout" (dig "rollout" (dict) $svc)) }}
 {{- end }}

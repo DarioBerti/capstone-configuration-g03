@@ -139,24 +139,47 @@ services:
       minReplicas: 2
       maxReplicas: 4
       targetCPUUtilizationPercentage: 70
-    # Fase 5 — weighted canary on the money path. Default OFF (base render unchanged: standard Ingress route).
-    # enabled=true -> a second `orders-canary` Deployment+Service runs `tag`, and a Traefik IngressRoute +
-    # weighted TraefikService route `weight`% of /api/orders to it (rest to stable). Promote 5->50->100 by
-    # editing `weight` and committing while watching the checkout SLOs; rollback = weight 0 (or enabled:false).
-    # (Blue/green is the same mechanism at weights 100/0 between two colour tracks — follow-up.)
-    canary:
-      enabled: false
-      tag: 22ce722        # the canary build's image tag to trial (a new commit SHA)
-      weight: 5           # percent of /api/orders traffic sent to the canary
-      replicaCount: 1     # fixed small exposure — the canary is controlled traffic, not an autoscaled tier
-    # Fase 5 — blue/green (ALTERNATIVE to canary; mutually exclusive — the chart fails the render if both are on,
-    # since both own the /api/orders route). blue = the stable `orders`; green = a second `orders-green` running
-    # `greenTag` at full capacity. Release = flip `active` blue->green (atomic 100% cutover); rollback = flip back.
-    # While active=blue, green runs but gets 0 public traffic, so you can smoke-test it internally first.
-    bluegreen:
-      enabled: false
-      greenTag: 22ce722   # the candidate (green) image tag
-      active: blue        # blue | green  -> which colour serves /api/orders at 100%
+    # Fase 5 — progressive delivery (Argo Rollouts). With a strategy set, the orders workload renders as a
+    # Rollout CRD instead of a Deployment and the controller executes the release policy below on EVERY image
+    # bump (CI bumps the tag -> Argo CD syncs -> the Rollout sees a new pod template and starts the ramp).
+    # strategy: "canary" | "bluegreen" | "" (empty = plain Deployment, no progressive delivery).
+    #
+    # canary: ramps /api/orders traffic stable->canary through the weighted TraefikService `orders-weighted`
+    # (weights are PATCHED at runtime by the Rollouts controller — never declared in Git; the Argo CD app
+    # ignores the controller-managed fields). Each step holds `pause` while the background AnalysisRun
+    # (templates/analysis.yaml: canary-scoped SLO + consumer-failure queries) keeps gating: a failed analysis
+    # auto-aborts the rollout and resets the weight to 0 = instant rollback to stable, no human in the loop.
+    #
+    # NB (async saga): the weight governs ONLY the HTTP intake. Canary pods join the SAME Kafka consumer group
+    # as stable, so saga replies are consumed by canary code too — `canaryReplicas: 1` bounds that exposure to
+    # one pod during the ramp and the analysis watches the canary's consumer failure rate, but the hard release
+    # invariant is EVENT COMPATIBILITY between versions (see docs/design.md §4-D).
+    #
+    # bluegreen: the preview runs at full capacity next to the active colour; promotion flips the `orders`
+    # Service selector atomically (manual gate: `kubectl argo rollouts promote orders`); rollback = `undo`.
+    # The async caveat applies double here: the preview consumes saga replies at full share BEFORE promotion.
+    rollout:
+      strategy: canary
+      canary:
+        # Each step: (optional) pin the canary ReplicaSet size, set the TraefikService weight, hold `pause`
+        # while the analysis runs. `canaryReplicas` bounds the Kafka consumer-side exposure; `matchTrafficWeight`
+        # releases the pin so the canary scales with its traffic share. Full promotion follows the last step.
+        steps:
+          - canaryReplicas: 1
+            weight: 5
+            pause: 2m
+          - weight: 25
+            pause: 2m
+          - matchTrafficWeight: true
+            weight: 50
+            pause: 5m
+        # SLO-gated promotion (AnalysisTemplate <svc>-canary-slo). Needs Prometheus (kind turns this off:
+        # there the steps gate on the pauses alone and promote/abort stay manual judgement calls).
+        analysis:
+          enabled: true
+      bluegreen:
+        # never auto-cutover: a human promotes after smoke-testing the preview Service in-cluster
+        autoPromotionEnabled: false
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
@@ -358,3 +381,7 @@ observability:
   checkoutSuccessTarget: "0.99"
   # p99 objective in SECONDS for the synchronous POST /api/orders ack latency. String for the same reason.
   checkoutAckP99Seconds: "0.3"
+  # In-cluster Prometheus URL the Argo Rollouts AnalysisTemplates query (templates/analysis.yaml). The
+  # kube-prometheus-stack is installed in namespace `monitoring` (see justfile kube-prometheus-install);
+  # service name = <release>-prometheus.
+  prometheusUrl: http://kube-prometheus-stack-prometheus.monitoring.svc:9090

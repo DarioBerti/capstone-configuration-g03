@@ -4,11 +4,12 @@
 una fase cambia stato. Il **design + scelte implementative** (alto livello) sta in `docs/design.md`; gli errori
 degli agenti (gradato) in `docs/agent-log.md`.
 
-> **DOVE SIAMO (01/07/2026):** Fasi 0-5 fatte; il money path è stato **riscritto da HTTP sincrono a saga async
+> **DOVE SIAMO (02/07/2026):** Fasi 0-5 fatte; il money path è stato **riscritto da HTTP sincrono a saga async
 > Kafka command/reply** + **Debezium CDC** (outbox letto dal WAL, no relay a polling) — mergiato in `app/dev` e
-> `config/main`. Rimossi i leftover del flusso sync (client `orders-svc` / secret `orders-oidc` / URL sync).
-> **Resta:** riallineo docs (in corso), reintrodurre i pattern di resilienza in versione async (decisione team),
-> e la **Fase 6** (chaos, da riscrivere sull'async). Cluster AKS + kind **fermi** (zero costi).
+> `config/main`. Leftover sync rimossi; docs consolidati (design.md unico per repo). **Fase 5 rifatta prod-grade:
+> Argo Rollouts** (canary SLO-gated con abort automatico; D9 chiusa). **Resta:** resilienza async da ri-collocare
+> (decisione PayPal/KEDA — Fase 2), tracing (Riccardo), monitoring CDC/lag (Dario, Fase 4) e la **Fase 6**
+> (chaos, da riscrivere sull'async). Cluster AKS **fermo** (zero costi).
 
 Legenda: ✅ fatto · 🔄 in corso · ⬜ da fare
 
@@ -18,7 +19,7 @@ Legenda: ✅ fatto · 🔄 in corso · ⬜ da fare
  Fase 2  Resilienza             🔄   ← edge @RateLimiter (429) + DLT/retry async OK; breaker/bulkhead da ri-collocare
  Fase 3  Piattaforma su cluster ✅   ← verificata su AKS; + Debezium (Kafka Connect 3 repliche, CNPG logical)
  Fase 4  Observability          🔄   ← metriche+SLO+dashboard validate LIVE; resta tracing (Riccardo) + CDC/lag monitoring
- Fase 5  Progressive delivery   ✅   ← canary + blue/green validati LIVE su kind
+ Fase 5  Progressive delivery   ✅   ← Argo Rollouts: canary SLO-gated (abort automatico) + blue/green
  Fase 6  Chaos + postmortem     ⬜   ← 5 esperimenti (da riscrivere per l'async) + postmortem + demo
 ```
 
@@ -68,14 +69,21 @@ Col cutover async, il breaker/bulkhead/retry **sincroni** sono stati **ritirati*
 - ⬜ **Da abilitare ora che la saga è Kafka:** dashboard **consumer-lag** + monitoraggio **CDC/Connect** (stato
   connector, slot) con allarme "connector down / slot che cresce".
 
-## Fase 5 — Progressive delivery ✅ (canary + blue/green — validati LIVE su kind)
-Meccanismo GitOps-native via CRD Traefik (dettaglio in `docs/design.md §4-D`).
-- ✅ **Canary**: `IngressRoute /api/orders` → `TraefikService` pesata (`orders`/`orders-canary`); peso in `values.yaml`,
-  promozione 5→50→100 = commit sulle SLO, rollback = weight 0. Refactor `_workload.tpl` (stable+canary una definizione).
-- ✅ **Blue/green**: `orders-green` a piena capacità + IngressRoute 100% al colore `active` (switch atomico); mutuamente
-  esclusivo col canary (`fail` se entrambi).
-- ✅ **Validati LIVE su kind (30/06):** canary weight=50 → split 12/12; blue/green → ~100% al colore attivo.
-- ⬜ (valutare) **Argo Rollouts** per l'analisi automatica (D9); la prova live su AKS = parte della demo Fase 6.
+## Fase 5 — Progressive delivery ✅ (Argo Rollouts — canary SLO-gated + blue/green)
+**D9 chiusa (02/07): Argo Rollouts** al posto del peso manuale (quello = "controller umano su Grafana" =
+delivery-infra fatta a mano, stessa categoria del relay outbox pre-Debezium). Dettaglio `docs/design.md §4-D`,
+runbook `platform/argo-rollouts/README.md`.
+- ✅ **Meccanica**: `orders` = CRD `Rollout` (stesso pod template, `_workload.tpl`); ogni bump CI di `image.tag`
+  → ramp automatico 5→25→50→100 sulla `TraefikService` pesata (pesi mossi dal controller, mai in Git).
+- ✅ **Canary analysis** (il salto di qualità): AnalysisRun in background sulle query SLO Fase-4 canary-scoped
+  (success-rate, ack p99, **failure dei listener Kafka**) → analisi KO = **abort/rollback automatico**.
+- ✅ **Blue/green** nativo come strategia alternativa (preview + flip atomico del selector, promozione manuale).
+- ✅ **Convivenza GitOps**: `ignoreDifferences` (managedFieldsManagers) + `RespectIgnoreDifferences` sull'app
+  Argo CD; controller pinnato (chart 2.41.0/app v1.9.0) con i flag `traefik.io` (senza = lookup falliti).
+- ✅ **Regola di release (async)**: canary/preview **condividono il consumer group** → il peso governa solo
+  l'intake HTTP; invariante = compatibilità comandi/reply tra versioni adiacenti (v. design §4-D).
+- ✅ Validazione precedente del meccanismo manuale su kind (30/06: split 12/12, b/g al colore attivo) +
+  **E2E Rollouts su kind** (ramp automatico + abort). La prova live su AKS = parte della demo Fase 6.
 
 ## Fase 6 — Chaos + postmortem + demo ⬜
 - ⬜ **5 esperimenti** (report in `docs/chaos/`), **da riscrivere per l'async**: 01 payments-latency (non più
@@ -89,7 +97,7 @@ Meccanismo GitOps-native via CRD Traefik (dettaglio in `docs/design.md §4-D`).
 ## Decisioni aperte
 - **Resilienza async**: quali pattern re-introdurre (bulkhead esplicito? KEDA? breaker attorno a PayPal?) — vedi Fase 2.
 - **PayPal**: PSP reale vs mock (la traccia è domain-agnostica → mock accettabile; PayPal = polish + home del breaker).
-- **D9**: `TraefikService` (scelto) vs Argo Rollouts (analisi automatica).
+- ~~**D9**: TraefikService vs Argo Rollouts~~ → **CHIUSA 02/07: Argo Rollouts** (canary analysis automatica sulle SLO; v. Fase 5).
 - **Debezium slot-failover**: mitigazione per il failover CNPG.
 
 ## Verificare in locale

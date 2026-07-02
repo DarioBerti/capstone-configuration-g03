@@ -22,6 +22,20 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: eurotransit
+  # Fase 5 — fields the ARGO ROLLOUTS controller owns at runtime and Argo CD must not fight over:
+  # the orders/orders-canary(/preview) Service selectors (Rollouts injects rollouts-pod-template-hash to
+  # pin each Service to its ReplicaSet) and the orders-weighted TraefikService weights (Rollouts drives
+  # them step by step; Git deliberately declares NO weight). managedFieldsManagers scopes the ignore to
+  # exactly the fields that controller wrote (server-side-apply field ownership), nothing else.
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      managedFieldsManagers:
+        - argo-rollouts
+    - group: traefik.io
+      kind: TraefikService
+      managedFieldsManagers:
+        - argo-rollouts
   syncPolicy:
     # automated = reconcile without a human clicking "Sync":
     #   prune    -> delete cluster resources that were removed from Git
@@ -34,3 +48,6 @@ spec:
       - CreateNamespace=true
       # Server-side apply plays better with large CRDs (CloudNativePG Cluster, etc...)
       - ServerSideApply=true
+      # honour ignoreDifferences DURING sync too (not only in the diff view), or selfHeal would still
+      # revert the Rollouts-managed weights/selectors on every reconcile
+      - RespectIgnoreDifferences=true

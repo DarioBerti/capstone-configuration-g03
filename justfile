@@ -165,6 +165,34 @@ keycloak-verify:
     kubectl --context {{ctx}} -n eurotransit get keycloak,keycloakrealmimport
     kubectl --context {{ctx}} -n eurotransit get ingress keycloak
 
+# ── platform: Argo Rollouts (Fase 5 — progressive delivery controller) ─────
+
+# install/upgrade Argo Rollouts (controller + web dashboard). Pins the SAME chart/app version the Argo CD
+# Application deploys in prod (platform/argocd/argo-rollouts-application.yaml). The two --traefik-* flags
+# point the traffic router at Traefik v3's traefik.io API group (the controller still defaults to the
+# retired traefik.containo.us -> without them every TraefikService lookup fails). MUST run before
+# `app-deploy`: the chart renders a Rollout CR for orders, which needs the CRDs.
+rollouts-install:
+    helm repo add argo https://argoproj.github.io/argo-helm
+    helm repo update argo
+    helm upgrade --install argo-rollouts argo/argo-rollouts \
+      --version 2.41.0 \
+      --namespace argo-rollouts --create-namespace \
+      --set controller.replicas=1 \
+      --set 'controller.extraArgs[0]=--traefik-api-group=traefik.io' \
+      --set 'controller.extraArgs[1]=--traefik-api-version=traefik.io/v1alpha1' \
+      --set dashboard.enabled=true
+
+# verify Rollouts: controller up, CRDs registered, the orders Rollout status (Healthy / Progressing / Paused)
+rollouts-verify:
+    kubectl --context {{ctx}} -n argo-rollouts get pods
+    @kubectl --context {{ctx}} get crd | grep -E "rollouts|analysis" || true
+    kubectl --context {{ctx}} -n eurotransit get rollout,analysisrun 2>/dev/null || true
+
+# the demo view: web dashboard (steps/weights/analysis live) -> http://localhost:3100
+rollouts-dashboard:
+    kubectl --context {{ctx}} -n argo-rollouts port-forward service/argo-rollouts-dashboard 3100:3100
+
 # verify Step 3: CRDs present, operators Running, Kafka cluster + topics Ready
 data-verify:
     @kubectl --context {{ctx}} get crd | grep -E "cnpg|strimzi" || true
@@ -373,7 +401,7 @@ dev-env-files:
 # ── one-shot bootstrap ─────────────────────────────────────────────────────
 
 # full local bootstrap from scratch: cluster + registry + platform (Steps 1-3) + Keycloak operator
-bootstrap-kind: cluster-up registry-up traefik-install certmanager-install cnpg-install strimzi-install kafka-kind-apply keycloak-install
+bootstrap-kind: cluster-up registry-up traefik-install certmanager-install cnpg-install strimzi-install kafka-kind-apply keycloak-install rollouts-install
     @echo ">> kind cluster + registry + platform + Keycloak operator ready."
     @echo ">> next:  just images-kind   &&   just app-deploy"
 
