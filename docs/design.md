@@ -97,10 +97,49 @@ il CDC va ripristinato (mitigazione + verifica nel chaos #5).
 - **Metriche/SLO**: Micrometer→Prometheus via ServiceMonitor per servizio. SLO del checkout (`PrometheusRule`):
   **success-rate intake ≥99%/28g** e **ack p99 ≤300ms** su `http_server_requests_seconds*` (metrica standard →
   sopravvive al rework); un **429 non è errore**. Alert **burn-rate multi-finestra** (fast 1h/5m ×14.4, slow 6h/30m ×6).
-  **Non si allarma** su CPU/breaker/429. Da abilitare ora che la saga è Kafka: dashboard **consumer-lag** + monitoraggio
-  **CDC/Connect** (stato connector, slot).
-- **Tracing**: app strumentate (Micrometer→OTLP) → **OTel Collector** (gateway) → **Tempo** (datasource Grafana);
-  traceId propagato negli header Kafka per vedere l'intera pipeline. **Log** ECS JSON con traceId/spanId.
+  **Non si allarma** su CPU/breaker/429.
+- **SLI di completamento saga (Fase 4)** — l'intake SLO vede solo la porta d'ingresso: dopo il cutover async un
+  202 non significa più "ordine completato" (un ordine può stallare con zero 5xx e zero lag). Il sintomo
+  user-visible è **`checkout_saga:terminal_ratio:rate30m`** = (confirmed+rejected)/placed con denominatore
+  `offset 3m` (> deadline sweeper 2m): **terminal, non confirmed** — SOLD_OUT/PAYMENT_DECLINED sono esiti
+  corretti della saga e non devono svegliare nessuno (il confirmed-ratio resta come pannello business). Si pagia
+  su ratio < 0.99 e su **`orders_overdue_nonterminal` > 0** (gauge dello sweeper: cattura lo stallo totale anche
+  a traffico zero). Contatori app: `orders_confirmed_total` / `orders_rejected_total{reason}`.
+- **Ruoli dei segnali (regola: si pagia solo se serve un umano E gli utenti soffrono ADESSO):**
+  | segnale | ruolo | alert |
+  |---|---|---|
+  | intake SLO (success-rate + ack p99) | salute porta d'ingresso | **SÌ** |
+  | saga terminal-ratio + ordini stuck | ordini che non finiscono (user-visible) | **SÌ** |
+  | DLT depth (`eurotransit_dlt:depth:sum`) | ordini falliti per sempre, non si auto-risana | **SÌ** |
+  | CDC: connector non RUNNING / slot perso/inattivo/WAL che cresce | pipeline di pubblicazione ferma (stallo silenzioso) | **SÌ** |
+  | consumer-lag (`kafka_consumergroup_lag`) | diagnostica: si auto-drena | NO — dashboard |
+  | CPU/memoria/429/lag Debezium | causa o comportamento by-design | NO — dashboard |
+  Sorgenti: **kafka-exporter** Strimzi (lag + offset DLT; PodMonitor `platform/strimzi/monitoring.yaml`) e
+  **JMX di Connect/Debezium** (`platform/debezium/connect-metrics.yaml` + `monitoring.yaml`); slot dal
+  PodMonitor CNPG (adottato via `kube-prometheus-values.yaml`, `podMonitorSelectorNilUsesHelmValues: false` —
+  i PodMonitor generati da CNPG non hanno la label `release`).
+- **Disciplina di cardinalità (Fase 4)**: `uri` resta templated (`/api/orders/{id}`, mai id grezzi); lag aggregato
+  `by (consumergroup)`/`by (topic)`, **mai per partizione**; pannelli raggruppati per service/job, **mai per `pod`**
+  (canary/HPA fanno churn dei nomi); pre-aggregazione con recording rule. **NON si droppano `pod`/`instance` sugli
+  ScrapeMonitor delle app**: sono l'identità delle serie multi-replica (dropparli = serie duplicate corrotte);
+  l'unica eccezione è il kafka-exporter (metriche cluster-level, `pod` droppato per evitare il churn al restart).
+  Contratto label con l'analysis di Fase 5: `service`/`uri`/`result` non si toccano.
+- **Doppio-scrape a riposo (Fase 5 × Fase 4)**: a riposo le Service `orders` e `orders-canary` selezionano gli
+  STESSI pod stable → ogni pod è scrappato due volte (`service="orders"` e `service="orders-canary"`). I rapporti
+  (error-ratio, quantili, SLO rule) sono **immuni** (numeratore e denominatore raddoppiano insieme); i pannelli di
+  **rate assoluto leggerebbero 2×** → regola: i pannelli di throughput filtrano la vista stable
+  (`service="orders"`, `$job` esclude `-canary|-preview`); le serie `-canary`/`-preview` si usano SOLO nelle query
+  canary-scoped di `analysis.yaml`.
+- **Tracing (Fase 4)**: app strumentate (Micrometer→OTLP) → **OTel Collector** (gateway) → **Tempo**. Il produttore
+  degli eventi è **Debezium, non la KafkaTemplate** → l'instrumentazione in-process del producer è bypassata: il
+  contesto W3C si salva come **colonna `traceparent` della riga di outbox (stessa tx)** e l'Outbox Event Router lo
+  mappa a **header Kafka** (`table.fields.additional.placement: traceparent:header`); i consumer lo continuano con
+  `spring.kafka.listener.observation-enabled`. **Log** ECS JSON con traceId/spanId (correlazione by-ID, Loki non
+  installato — rimandata insieme agli exemplar metric↔trace, ultima miglia dopo il datasource Tempo).
+- **Politica di sampling (Fase 4, la "risposta a scala")**: le app campionano al 100%; decide il **gateway** con
+  `tail_sampling` (immagine **contrib**): si tengono TUTTE le tracce con errore e quelle lente (>2s end-to-end),
+  il resto al 10% (tunabile in un punto solo, zero modifiche app). Log: si tengono sempre gli errori,
+  level-filter sul resto. Metriche: recording rule pre-aggregate.
 
 ## 5. Note aperte / prossimi prod-grade
 - **Leftover sync** (orders `oidcClient`/`extraEnv`, client `orders-svc`, secret `orders-oidc`) — **rimossi**.
