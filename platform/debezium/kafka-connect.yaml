@@ -23,6 +23,15 @@ spec:
   offsetStorageTopic: debezium-connect-offsets
   configStorageTopic: debezium-connect-configs
   statusStorageTopic: debezium-connect-status
+  # Fase 4 — CDC monitoring: run the JMX Prometheus agent with the rules in connect-metrics.yaml.
+  # Exposes connector/task state + Debezium streaming lag on :9404 (scraped by monitoring.yaml's PodMonitor);
+  # a dead connector here means the money path silently stops publishing while the intake still 202s.
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom:
+      configMapKeyRef:
+        name: debezium-connect-metrics
+        key: metrics-config.yml
   config:
     # internal topics replicated x3 to match the money-path durability posture
     config.storage.replication.factor: 3
