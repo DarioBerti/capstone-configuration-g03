@@ -1,7 +1,7 @@
 {{- /*
 HorizontalPodAutoscalers -> only for services that opt in via "hpa.enabled" (catalog and orders: the public sync endpoints, where load is bursty). Inventory and Payments deliberately don't autoscale: their bottleneck is the database / downstream PSP, not service CPU (see values.yaml comments).
 
-The matching Deployment omits "replicas" when the HPA is enabled, so Argo CD and the HPA never fight over the count (Note for Phase 5: a canary split (orders-v1/v2) must re-point or duplicate the HPA)
+The matching workload omits "replicas" when the HPA is enabled, so Argo CD and the HPA never fight over the count. Fase 5: a progressively-delivered service is a Rollout, and the HPA targets it directly (below) — Rollouts then sizes the stable/canary ReplicaSets from that total per its own strategy rules.
 */ -}}
 {{- /* loop over every service; "dig" safely reads hpa.enabled (default false if absent) */}}
 {{- range $name, $svc := .Values.services }}
@@ -15,10 +15,16 @@ metadata:
   labels:
     {{- include "eurotransit.labels" (dict "svc" $name "root" $) | nindent 4 }}
 spec:
-  # which workload to scale: the Deployment of the same name
+  # which workload to scale: the Rollout when the service does progressive delivery (Fase 5 — a Rollout
+  # exposes the same /scale subresource, so the HPA drives it exactly like a Deployment), else the Deployment
   scaleTargetRef:
+    {{- if dig "rollout" "strategy" "" $svc }}
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    {{- else }}
     apiVersion: apps/v1
     kind: Deployment
+    {{- end }}
     name: {{ $name }}
   # scale-out floor / ceiling (the floor matches the documented replicaCount baseline)
   minReplicas: {{ $svc.hpa.minReplicas }}

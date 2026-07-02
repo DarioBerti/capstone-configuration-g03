@@ -1,0 +1,98 @@
+{{- /*
+Fase 5 — traffic plumbing for Argo Rollouts progressive delivery (per service with a rollout.strategy).
+
+The Rollout itself renders in deployments.yaml (via _workload.tpl). This file adds the routing objects the
+strategy needs. NOTE the selector trick everywhere: the extra Services are declared with the SAME plain
+selector as the stable Service — the Rollouts controller pins each Service to the right ReplicaSet at
+runtime by injecting `rollouts-pod-template-hash` into the selector. We never declare per-track pods.
+
+canary:
+  IngressRoute (/api/<svc>) ──► TraefikService "<svc>-weighted" ──► { <svc> (stable) , <svc>-canary }
+  The weights are OWNED BY THE CONTROLLER (never declared here — the docs are explicit about not setting
+  them in Git); the Argo CD app ignores the controller-managed fields via ignoreDifferences, so Argo CD
+  and Rollouts never fight. Promotion/rollback is fully automated by the Rollout steps + analysis.
+
+bluegreen:
+  No Traefik objects at all: the standard Ingress (ingress.yaml) keeps routing /api/<svc> to the stable
+  Service, and promotion atomically re-points THAT Service's selector to the preview ReplicaSet. The
+  preview Service below gives the candidate an in-cluster address for pre-flip smoke tests.
+*/ -}}
+{{- range $name, $svc := .Values.services }}
+{{- $strategy := dig "rollout" "strategy" "" $svc }}
+{{- if eq $strategy "canary" }}
+---
+# canary track address: same plain selector as stable — Rollouts pins it to the canary ReplicaSet by hash.
+# The `name` LABEL differs (metrics from canary pods arrive as service="<svc>-canary" -> canary-scoped
+# analysis queries), but the SELECTOR stays the stable pair (selectors are hash-managed, labels are not).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-canary
+  labels:
+    {{- include "eurotransit.labels" (dict "svc" (printf "%s-canary" $name) "root" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "eurotransit.selectorLabels" (dict "svc" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $svc.port }}
+      targetPort: http
+      protocol: TCP
+---
+# Weighted round-robin between stable and canary. NO `weight` fields in Git: the Rollouts controller sets
+# them step by step (0 at steady state, 100 after full promotion resets to 0 on the next release).
+apiVersion: traefik.io/v1alpha1
+kind: TraefikService
+metadata:
+  name: {{ $name }}-weighted
+  labels:
+    {{- include "eurotransit.labels" (dict "svc" $name "root" $) | nindent 4 }}
+spec:
+  weighted:
+    services:
+      - name: {{ $name }}
+        port: {{ $svc.port }}
+      - name: {{ $name }}-canary
+        port: {{ $svc.port }}
+---
+# /api/<svc> enters through the weighted TraefikService (the standard Ingress skips this path — see
+# ingress.yaml). TLS reuses the eurotransit-tls cert that cert-manager provisions via the standard Ingress.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "eurotransit.labels" (dict "svc" $name "root" $) | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`{{ $.Values.global.domain }}`) && PathPrefix(`/api/{{ $name }}`)
+      kind: Rule
+      services:
+        - name: {{ $name }}-weighted
+          kind: TraefikService
+  tls:
+    secretName: eurotransit-tls
+{{- else if eq $strategy "bluegreen" }}
+---
+# preview (green) address for pre-promotion smoke tests: same plain selector as stable — Rollouts pins it
+# to the PREVIEW ReplicaSet by hash while the stable Service keeps serving the active colour.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-preview
+  labels:
+    {{- include "eurotransit.labels" (dict "svc" (printf "%s-preview" $name) "root" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "eurotransit.selectorLabels" (dict "svc" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $svc.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}
+{{- end }}

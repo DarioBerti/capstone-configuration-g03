@@ -1,0 +1,79 @@
+{{- /*
+Fase 5 — the canary's automated judgement (Argo Rollouts AnalysisTemplate, per service with
+rollout.strategy=canary and rollout.canary.analysis.enabled).
+
+Referenced as BACKGROUND analysis by the Rollout (_workload.tpl): it runs continuously from the first
+weight step; `failureLimit` consecutive-ish failed measurements ABORT the rollout — traffic snaps back to
+stable with no human in the loop. This is the same judgement a human made in the manual-canary era
+(watch the Fase-4 SLIs, then promote/rollback), executed by the controller with the SAME queries.
+
+The three gates, all scoped to the CANARY pods only (they are scraped through the `<svc>-canary` Service
+-> their series carry service="<svc>-canary", distinct from stable — see observability.yaml):
+  1. intake success-rate  >= the checkout SLO target (429 shed is NOT an error, exactly like the SLO rules)
+  2. intake ack p99       <= the checkout latency objective
+  3. Kafka listener failure rate ~ 0  — the async-saga blind spot of any HTTP-weight canary: canary pods
+     consume saga replies regardless of the HTTP weight, so a canary broken ONLY on the consumer side would
+     look green to gates 1-2. Micrometer's spring.kafka.listener timer (result="failure") catches it.
+
+Query hardening: `or vector(...)` pins the no-traffic case to a PASSING value (no samples = nothing broken),
+so a quiet cluster never aborts a rollout with Inconclusive/Error measurements.
+
+Gated on observability.enabled too: without the Prometheus stack the template would be a foot-gun (every
+measurement erroring -> every rollout aborted). kind (no Prometheus) disables analysis in values-kind.yaml.
+*/ -}}
+{{- $obs := .Values.observability | default dict }}
+{{- if $obs.enabled }}
+{{- range $name, $svc := .Values.services }}
+{{- if and (eq (dig "rollout" "strategy" "" $svc) "canary") (dig "rollout" "canary" "analysis" "enabled" false $svc) }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ $name }}-canary-slo
+  labels:
+    {{- include "eurotransit.labels" (dict "svc" $name "root" $) | nindent 4 }}
+spec:
+  metrics:
+    # ── 1. canary intake success-rate vs the checkout SLO target ─────────────────────────────────────
+    - name: canary-intake-success-rate
+      interval: 30s
+      # tolerate isolated blips (a single unlucky 30s window must not kill a release)
+      failureLimit: 3
+      successCondition: result[0] >= {{ $obs.checkoutSuccessTarget }}
+      provider:
+        prometheus:
+          address: {{ $obs.prometheusUrl }}
+          query: |
+            (
+              sum(rate(http_server_requests_seconds_count{service="{{ $name }}-canary", uri="/api/{{ $name }}", method="POST", status!~"5.."}[2m]))
+                /
+              sum(rate(http_server_requests_seconds_count{service="{{ $name }}-canary", uri="/api/{{ $name }}", method="POST"}[2m]))
+            ) or vector(1)
+    # ── 2. canary intake ack p99 vs the checkout latency objective ───────────────────────────────────
+    - name: canary-intake-ack-p99
+      interval: 30s
+      failureLimit: 3
+      successCondition: result[0] <= {{ $obs.checkoutAckP99Seconds }}
+      provider:
+        prometheus:
+          address: {{ $obs.prometheusUrl }}
+          query: |
+            histogram_quantile(0.99,
+              sum by (le) (rate(http_server_requests_seconds_bucket{service="{{ $name }}-canary", uri="/api/{{ $name }}", method="POST"}[2m])))
+            or vector(0)
+    # ── 3. canary Kafka listener failures ~ 0 (the consumer side no HTTP weight can canary) ──────────
+    # A poisoned message legitimately produces a short failure burst (bounded retry -> DLT), so the gate
+    # is a small absolute rate, not zero: sustained failures (a consumer-side regression) blow well past it.
+    - name: canary-consumer-failures
+      interval: 30s
+      failureLimit: 3
+      successCondition: result[0] < 0.1
+      provider:
+        prometheus:
+          address: {{ $obs.prometheusUrl }}
+          query: |
+            sum(rate(spring_kafka_listener_seconds_count{service="{{ $name }}-canary", result="failure"}[2m]))
+            or vector(0)
+{{- end }}
+{{- end }}
+{{- end }}

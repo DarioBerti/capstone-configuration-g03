@@ -68,6 +68,22 @@ services:
       repository: localhost:5001/eurotransit/orders
       tag: dev
       pullPolicy: Always
+    # Fase 5 on a laptop: same canary strategy/mechanics as prod, but no Prometheus on kind -> the
+    # SLO analysis is OFF (a template that can't reach Prometheus would abort every rollout) and the
+    # ramp is compressed to a demo cadence. Promote/abort are exercised manually:
+    #   kubectl argo rollouts -n eurotransit get rollout orders --watch | promote orders | abort orders
+    rollout:
+      canary:
+        analysis:
+          enabled: false
+        # NB: a list OVERRIDES the base list wholesale (helm merge semantics) — this is the full kind ramp
+        steps:
+          - canaryReplicas: 1
+            weight: 20
+            pause: 30s
+          - matchTrafficWeight: true
+            weight: 50
+            pause: 30s
   inventory:
     image:
       repository: localhost:5001/eurotransit/inventory

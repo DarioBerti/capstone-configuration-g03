@@ -32,26 +32,38 @@ Safety / bullet-proofing:
 {{- /* p99 ack-latency objective in SECONDS for the intake POST /api/orders. */}}
 {{- $latencyP99Seconds := $obs.checkoutAckP99Seconds }}
 
-{{- /* One ServiceMonitor per service: scrape its /actuator/prometheus on the named http port. */}}
+{{- /* One ServiceMonitor per service: scrape its /actuator/prometheus on the named http port.
+       Fase 5: a progressively-delivered service gets a SECOND monitor for its canary/preview Service —
+       those pods' series then carry service="<svc>-canary"/"<svc>-preview", which is what makes the
+       canary-scoped AnalysisTemplate queries (analysis.yaml) and a pre-flip look at the preview possible.
+       Off-rollout the extra Service selects the same (stable) pods; the duplicate scrape is harmless
+       (distinct `service` label = distinct series, and the SLO rules below aggregate over uri only). */}}
 {{- range $name, $svc := .Values.services }}
+{{- $strategy := dig "rollout" "strategy" "" $svc }}
+{{- $tracks := list $name }}
+{{- if eq $strategy "canary" }}{{ $tracks = append $tracks (printf "%s-canary" $name) }}{{ end }}
+{{- if eq $strategy "bluegreen" }}{{ $tracks = append $tracks (printf "%s-preview" $name) }}{{ end }}
+{{- range $track := $tracks }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ $name }}
+  name: {{ $track }}
   labels:
     # part-of ties it to our app; `release` is what the kube-prometheus-stack matches on to adopt this monitor
     app.kubernetes.io/part-of: eurotransit
     release: {{ $release }}
 spec:
-  # pick the Service of THIS service (same stable selector labels the Service/Deployment use)
+  # pick the Service of THIS track by its name label (the canary/preview Services differ from stable in
+  # their labels; their selectors are runtime-managed by Argo Rollouts — see progressive-delivery.yaml)
   selector:
     matchLabels:
-      {{- include "eurotransit.selectorLabels" (dict "svc" $name) | nindent 6 }}
+      {{- include "eurotransit.selectorLabels" (dict "svc" $track) | nindent 6 }}
   endpoints:
     - port: http                      # the Service port is named "http" -> scrape there
       path: /actuator/prometheus      # Micrometer's Prometheus endpoint (exposed by Actuator)
       interval: 15s                   # scrape cadence
+{{- end }}
 {{- end }}
 ---
 # All the checkout SLO logic in one rule object: recording rules pre-compute the error ratio over each window,

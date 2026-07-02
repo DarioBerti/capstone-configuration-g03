@@ -26,8 +26,8 @@ La CI **non tocca mai il cluster** (scrive solo il tag via PAT least-privilege).
   legge da lì); `values-kind.yaml` overlay locale, base/`values-prod` per AKS. `templates/` = un file per concern;
   `_workload.tpl` = definizione riusabile Deployment+Service (stable **e** canary/green da UNA sorgente).
 - `platform/` — componenti installati once (non nel chart): traefik, cert-manager, cloudnativepg, strimzi (Kafka),
-  **debezium** (Kafka Connect + connector), observability (kube-prometheus + OTel Collector + Tempo + dashboard),
-  sealed-secrets, argocd, chaos-mesh, k6. Ognuno col suo `README.md`.
+  **debezium** (Kafka Connect + connector), **argo-rollouts** (progressive delivery), observability (kube-prometheus +
+  OTel Collector + Tempo + dashboard), sealed-secrets, argocd, chaos-mesh, k6. Ognuno col suo `README.md`.
 - `bootstrap/` — kind cluster; `justfile` — runbook locale.
 
 ## 3. Decisioni di design chiave (con rationale)
@@ -73,11 +73,27 @@ il CDC va ripristinato (mitigazione + verifica nel chaos #5).
 
 ### D. Delivery + observability (Pilastro D)
 - **GitOps**: Argo CD riconcilia `main`; drift self-heal + prune; secret in Git solo come **SealedSecrets**.
-- **Progressive delivery** sul money path (`/api/orders`), GitOps-native via CRD Traefik:
-  - **Canary** = `IngressRoute` → `TraefikService` pesata `{orders: 100-w, orders-canary: w}`; peso in `values.yaml`,
-    promozione 5→50→100 = commit osservando le SLO, rollback = weight 0.
-  - **Blue/green** = `orders-green` a piena capacità + IngressRoute 100% al colore `active` (switch atomico).
-  - Mutuamente esclusivi (il chart fa `fail` se entrambi). *Valutare Argo Rollouts* per l'analisi automatica.
+- **Progressive delivery** sul money path (`/api/orders`) = **Argo Rollouts** (D9 chiusa: sostituisce il peso
+  manuale — quello era un "controller umano su Grafana", cioè delivery-infra fatta a mano). `orders` è un CRD
+  `Rollout` (stesso pod template degli altri servizi, da `_workload.tpl`); la **policy** sta in Git, l'**esecuzione**
+  è del controller: ogni bump di `image.tag` della CI diventa un rilascio progressivo **SLO-gated**.
+  - **Canary** (default) = ramp 5→25→50→100 sulla `TraefikService` pesata (`orders-weighted`, pesi **patchati a
+    runtime dal controller**, mai in Git) + **AnalysisRun** in background ogni 30s con 3 gate canary-scoped:
+    success-rate intake ≥ target SLO, ack p99 ≤ obiettivo, **failure-rate dei listener Kafka ~0**. Analisi KO →
+    **abort automatico** (peso a 0 = rollback istantaneo, nessun umano nel loop). `setCanaryScale: 1` nei primi
+    step limita l'esposizione consumer del canary a 1 pod.
+  - **Blue/green** (strategia alternativa, `rollout.strategy`) = preview a piena capacità, smoke-test in-cluster
+    su `orders-preview`, promozione manuale = flip **atomico** del selector della Service `orders` (niente Traefik).
+  - **Convivenza GitOps**: pesi/selector sono campi runtime del controller → l'app Argo CD li ignora via
+    `ignoreDifferences` (managedFieldsManagers: argo-rollouts) + `RespectIgnoreDifferences` — pattern documentato
+    Argo CD↔Rollouts. Il router Traefik richiede i flag `--traefik-api-group/version=traefik.io` (default ancora
+    `containo.us`; supporto dal v1.7). Runbook: `platform/argo-rollouts/README.md`.
+  - **⚠️ Semantica async (regola di release)**: i pod canary/preview **condividono il consumer group Kafka** con lo
+    stable — il peso HTTP governa solo l'intake; le reply della saga le consuma anche il codice nuovo (la preview
+    a piena capacità ne consuma ~metà PRIMA della promozione, e il flip non "disfa" ciò che ha già processato).
+    Nessun tool canary-izza le partizioni: l'invariante di release è la **compatibilità di comandi/reply e
+    transizioni tra versioni adiacenti** (schema forward/backward-compatible); il gate #3 dell'analysis sorveglia
+    proprio il lato consumer del canary. Vale per ogni release di orders.
 - **Metriche/SLO**: Micrometer→Prometheus via ServiceMonitor per servizio. SLO del checkout (`PrometheusRule`):
   **success-rate intake ≥99%/28g** e **ack p99 ≤300ms** su `http_server_requests_seconds*` (metrica standard →
   sopravvive al rework); un **429 non è errore**. Alert **burn-rate multi-finestra** (fast 1h/5m ×14.4, slow 6h/30m ×6).

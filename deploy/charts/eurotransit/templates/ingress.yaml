@@ -1,9 +1,9 @@
 {{- /*
 North-south entrypoint (Traefik + cert-manager TLS)
 
-Only Catalog and Orders are public (client -> gateway -> Catalog/Orders). Inventory, Payments and Notifications are internal: reached by Orders (sync) or via Kafka (async), never directly from the internet!
+Only Catalog, Orders and Users are public (client -> gateway -> service). Inventory, Payments and Notifications are internal: reached via Kafka (the async saga), never directly from the internet!
 
-Each service serves under its own path prefix (e.g. /api/orders, /api/catalog), so no strip-prefix middleware is needed (Phase 5 replaces the Orders route with a Traefik IngressRoute + TraefikService for weighted canary / blue-green delivery on the critical path)
+Each service serves under its own path prefix (e.g. /api/orders, /api/catalog), so no strip-prefix middleware is needed. Fase 5: when orders runs the CANARY strategy its route moves to a Traefik IngressRoute + weighted TraefikService (progressive-delivery.yaml); blue/green keeps the plain route below (the Rollouts controller flips the Service selector instead).
 */ -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -34,8 +34,9 @@ spec:
                 name: catalog
                 port:
                   number: {{ .Values.services.catalog.port }}
-          {{- if not (or (dig "enabled" false (.Values.services.orders.canary | default dict)) (dig "enabled" false (.Values.services.orders.bluegreen | default dict))) }}
-          # /api/orders/** -> the Orders service (public money-path entry)
+          {{- if ne (dig "rollout" "strategy" "" .Values.services.orders) "canary" }}
+          # /api/orders/** -> the Orders service (public money-path entry). Also the blue/green path: there
+          # the Rollouts controller flips THIS Service's selector on promotion, the route never changes.
           - path: /api/orders
             pathType: Prefix
             backend:
@@ -44,9 +45,9 @@ spec:
                 port:
                   number: {{ .Values.services.orders.port }}
           {{- else }}
-          # /api/orders is owned by a Traefik IngressRoute (Fase 5 progressive delivery): the weighted
-          # TraefikService (canary, ingressroute-orders.yaml) or the 100%-to-active-colour route (blue/green,
-          # bluegreen.yaml). Kept out of this Ingress to avoid a duplicate route.
+          # /api/orders is owned by the canary IngressRoute -> weighted TraefikService whose weights the
+          # Argo Rollouts controller drives (progressive-delivery.yaml). Kept out of this Ingress to avoid
+          # a duplicate route.
           {{- end }}
           # /api/users/** -> the Users service (self-service profile; the SPA calls it with the user token)
           - path: /api/users
