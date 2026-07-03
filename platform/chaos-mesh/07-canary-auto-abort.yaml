@@ -40,7 +40,7 @@ spec:
       labelSelectors:
         cnpg.io/cluster: orders-db
   delay:
-    latency: "700ms"
+    latency: "1200ms"
     jitter: "100ms"
     correlation: "0"
   # longer than failureLimit x interval (3 x 30 s) + margin; auto-reverts even if the delete is forgotten

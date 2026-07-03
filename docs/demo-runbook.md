@@ -39,6 +39,10 @@ az aks start -g $RG -n $CLUSTER
 kubectl config use-context lab_g03_cluster
 kubectl get nodes                        # atteso: 3x Ready
 
+# NORMALE dopo uno start: 1-2 pod "Error" con AGE alto e 0 restart = cadaveri della sessione precedente
+# (uccisi dallo stop; il rimpiazzo Running esiste già). Ripuliscili, NON sono un guasto:
+kubectl delete pods -A --field-selector=status.phase==Failed
+
 # lascia 3-5 minuti ad Argo CD per riconciliare tutto, poi controlla il quadro:
 kubectl -n argocd get application
 #  atteso: argo-rollouts  Synced   Healthy
@@ -112,9 +116,10 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:909
 # ARGO ROLLOUTS dashboard ─ http://localhost:3100 (scegli namespace "eurotransit" in alto)
 kubectl -n argo-rollouts port-forward service/argo-rollouts-dashboard 3100:3100
 
-# ARGO CD ─ https://localhost:8081 ─ user: admin, password:
+# ARGO CD ─ http://localhost:8081 ─ user: admin, password:
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
-kubectl -n argocd port-forward svc/argocd-server 8081:443
+# usa la porta 80 (http): il server è in modalità insecure dietro Traefik -> il forward su :443 dà 000
+kubectl -n argocd port-forward svc/argocd-server 8081:80
 ```
 > Tempo (tracce) NON ha una sua UI: si usa da **Grafana → Explore → datasource "Tempo"**.
 
@@ -224,8 +229,19 @@ kubectl -n eurotransit logs deploy/inventory --tail=30 | grep -iE "error|dead"
 4. pulizia: `kubectl -n eurotransit delete networkchaos canary-db-latency`
    *(runbook e criteri PASS: `docs/chaos/07-canary-auto-abort.md`)*
 
-> Chaos Mesh deve essere installato (una tantum): comando pinnato in `platform/chaos-mesh/README.md`
-> (`--version 2.8.3` + socket containerd).
+> **Chaos Mesh è GIÀ installato su AKS** (2.8.3, fatto il 03/07 durante il dry-run) → salta l'install.
+> ⚠️ Se mai lo reinstalli **da Git Bash su Windows**: il path del socket viene mangiato
+> (`/run/containerd/...` → `C:/Program Files/Git/run/containerd`) e i `chaos-daemon` vanno in CrashLoop →
+> prefissa il comando con `MSYS_NO_PATHCONV=1 helm ...`. (agent-log #25)
+
+> **NOTA ONESTA sul 07 (dal dry-run 03/07):** l'**abort automatico è provato e affidabile** — il rollout va
+> Degraded e lo **stable resta intatto** (weight 100/0) qualunque cosa accada. Il gate che scatta però dipende
+> dalla latenza iniettata: **~2s** fa fallire la *readiness DB* dei pod canary → abort via
+> `ProgressDeadlineExceeded` (safe, ma non è il gate SLO); **<1s** a basso peso (5%) spesso NON accumula
+> abbastanza campioni per bucare il p99. **Per la demo pulita "l'analysis lo abortisce":** inietta quando il
+> canary è già a **≥25%** di peso (più traffico = il p99 ha potere statistico), latenza ~**1-1.5s**. In ogni
+> caso il criterio PASS che conta è: *lo stable non è mai stato promosso e non ha mai sofferto*. Chaos Mesh
+> installato, quindi il pezzo di prereq è fatto.
 
 ## 9. Spegnimento (SEMPRE, in quest'ordine)
 

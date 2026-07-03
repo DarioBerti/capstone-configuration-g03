@@ -533,3 +533,23 @@ windows went 0/0 = **NaN — a present sample the vector() guard cannot replace*
 (the pattern Argo Rollouts documents for exactly this). **Lesson:** PromQL has TWO distinct "no data"
 shapes — empty vector and NaN sample — and a gate must be immune to both; a canary with no traffic is
 "no evidence of failure", never "failure".
+
+## 25. Fase 4/5/6 live dry-run (03/07) — five environment truths the desk checks couldn't have surfaced
+
+Running the demo runbook end-to-end on AKS from scratch surfaced things that only a live cluster shows:
+- **Tempo datasource URL wrong**: the grafana/tempo chart serves HTTP on **3200**, not 3100 — the
+  exemplar->trace click-through 502'd until fixed. (Yesterday's trace checks passed only because I'd
+  port-forwarded to whatever port answered.)
+- **saga terminal-ratio rule silently empty**: `sum(increase(orders_rejected_total[30m]))` is an EMPTY
+  vector until the first rejection EVER exists, and PromQL `empty + x = empty` -> the whole recording rule
+  produced nothing. Guarded both addends with `or vector(0)` (same family as the NaN gate fix, #24).
+- **exemplar-storage is a feature flag**: the exemplars the app already emits (OpenMetrics `# {trace_id=...}`)
+  were dropped by Prometheus until `--enable-feature=exemplar-storage` was set via the stack values.
+- **Chaos Mesh socket path mangled by Git Bash**: `--set chaosDaemon.socketPath=/run/containerd/...` became
+  `C:/Program Files/Git/run/containerd` (MSYS path conversion) -> chaos-daemon CrashLoopBackOff. Needs
+  `MSYS_NO_PATHCONV=1`. Its webhook cert also needs ~30s to propagate before the first NetworkChaos applies.
+- **chaos-07 latency is a narrow band**: 2s on the canary->DB path trips the readiness DB probe (abort via
+  ProgressDeadlineExceeded, not the SLO gate); 700ms at 5% weight is too few samples to move the p99. The
+  abort MECHANISM is proven either way (stable stayed at 100/0, never promoted, never degraded) — but the
+  clean "the analysis gate aborts it" story needs ~1.2s injected at >=25% weight. Documented in the runbook
+  and the manifest rather than pretending a single magic number works.
