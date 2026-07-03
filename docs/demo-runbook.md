@@ -60,6 +60,10 @@ kubectl -n argocd get application
 kubectl get pods -A | grep -vE "Running|Completed"      # atteso: SOLO l'header (nessuna riga)
 # il CDC è vivo: 3 connector RUNNING
 kubectl -n kafka get kafkaconnector                      # atteso: READY=True x3
+# orders gira l'immagine giusta (775b8af o più recente — quella con bucket + warm-before-ready):
+kubectl -n eurotransit get rollout orders -o jsonpath='{.spec.template.spec.containers[0].image}'; echo
+# i bucket dell'istogramma sono vivi (query su Prometheus :9090, appena è su — deve tornare > 0):
+#   count(http_server_requests_seconds_bucket)
 ```
 
 ## 3. Password-grant ON + token (serve per generare traffico)
@@ -190,7 +194,40 @@ kubectl -n eurotransit get traefikservice orders-weighted -o jsonpath='{.spec.we
 kubectl -n eurotransit get analysisrun
 ```
 Racconto per il prof: *pesi mai scritti in Git (li muove il controller: `ignoreDifferences`),
-gate = le NOSTRE query SLO di Fase 4, abort automatico = chaos 07.*
+gate = le NOSTRE query SLO di Fase 4, abort automatico = chaos 07.* Dal 03/07 il **gate p99 misura
+latenza vera** (bucket abilitati in tutti i servizi) e il **warm-before-ready** dell'app evita i falsi
+abort da cold-start quando i pod canary si accendono.
+
+## 7-bis. DEMO BLUE/GREEN (Fase 5 — la seconda strategia che la traccia chiede)
+
+**Stai dimostrando: "oltre al canary graduale, sappiamo fare il cutover atomico con smoke-test pre-flip".**
+(~15 min. Il meccanismo è Rollouts nativo: la Service `orders` viene ri-puntata ATOMICAMENTE al nuovo
+ReplicaSet alla promozione; prima del flip il candidato è raggiungibile in-cluster su `orders-preview`.)
+
+```bash
+# 1) passa orders alla strategia blue/green (commit in values.yaml):
+#    services: -> orders: -> rollout: -> strategy: bluegreen     (era "canary")
+git add deploy/charts/eurotransit/values.yaml && git commit -m "demo: switch orders to blue/green" && git push
+#    Argo applica: sparisce l'IngressRoute canary (la rotta torna alla Ingress standard -> Service orders),
+#    compare la Service orders-preview. Aspetta eurotransit Synced.
+
+# 2) innesca una release (bump del tag di orders, come al §7) -> il PREVIEW sale a piena capacità
+kubectl -n eurotransit get rollout orders -w        # atteso: Paused (autoPromotionEnabled=false = gate umano)
+
+# 3) SMOKE-TEST sul preview PRIMA del flip (in-cluster, il pubblico non lo vede):
+kubectl -n eurotransit run smoke --rm -i --restart=Never --image=curlimages/curl --   curl -s http://orders-preview:8080/actuator/health/readiness    # atteso: {"status":"UP"}
+
+# 4) PROMOZIONE = flip atomico del selector (un solo comando, zero downtime):
+kubectl argo rollouts promote orders -n eurotransit    # (o il bottone Promote sulla dashboard :3100)
+kubectl -n eurotransit get rollout orders -w           # -> Healthy; la Service orders punta al nuovo RS
+
+# 5) (rollback = `kubectl argo rollouts undo orders`: il vecchio RS è ancora lì, flip inverso istantaneo)
+
+# 6) FINITA LA DEMO: torna alla strategia canary (commit inverso di strategy) e riallinea il tag se serve.
+```
+> ⚠️ Racconta anche il caveat async (design §4-D): il preview a piena capacità **consuma già le reply Kafka**
+> prima del flip — il cutover atomico governa l'HTTP; la garanzia sul lato eventi è la compatibilità tra
+> versioni adiacenti. Detto al prof, è un punto di comprensione profonda, non una debolezza.
 
 ## 8. DEMO CHAOS (Fase 6) — i due da orale (veloci e leggibili)
 
@@ -234,14 +271,11 @@ kubectl -n eurotransit logs deploy/inventory --tail=30 | grep -iE "error|dead"
 > (`/run/containerd/...` → `C:/Program Files/Git/run/containerd`) e i `chaos-daemon` vanno in CrashLoop →
 > prefissa il comando con `MSYS_NO_PATHCONV=1 helm ...`. (agent-log #25)
 
-> **NOTA ONESTA sul 07 (dal dry-run 03/07):** l'**abort automatico è provato e affidabile** — il rollout va
-> Degraded e lo **stable resta intatto** (weight 100/0) qualunque cosa accada. Il gate che scatta però dipende
-> dalla latenza iniettata: **~2s** fa fallire la *readiness DB* dei pod canary → abort via
-> `ProgressDeadlineExceeded` (safe, ma non è il gate SLO); **<1s** a basso peso (5%) spesso NON accumula
-> abbastanza campioni per bucare il p99. **Per la demo pulita "l'analysis lo abortisce":** inietta quando il
-> canary è già a **≥25%** di peso (più traffico = il p99 ha potere statistico), latenza ~**1-1.5s**. In ogni
-> caso il criterio PASS che conta è: *lo stable non è mai stato promosso e non ha mai sofferto*. Chaos Mesh
-> installato, quindi il pezzo di prereq è fatto.
+> **NOTA sul 07 (aggiornata 03/07 sera):** l'**abort automatico è provato**; con i bucket abilitati il gate
+> p99 ora **misura latenza reale** (prima era no-op via `vector(0)`). Restano le due regole d'oro: inietta
+> quando il canary è a **≥25%** di peso (a 5% ci sono troppi pochi campioni per muovere un p99) e latenza
+> **~1.2s** (già nel manifest — ~2s fa scattare prima la *readiness DB* → abort via ProgressDeadlineExceeded,
+> comunque safe ma non è il gate che vuoi mostrare). PASS che conta sempre: *stable mai promosso, mai sofferto*.
 
 ## 9. Spegnimento (SEMPRE, in quest'ordine)
 
