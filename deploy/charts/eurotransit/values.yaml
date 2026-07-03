@@ -120,11 +120,6 @@ services:
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
-    # Forces a fresh Rollout revision on demand: a new pod-template hash makes Argo Rollouts create a NEW
-    # AnalysisRun that picks up the CURRENT AnalysisTemplate, whereas a plain rollout `retry` re-runs the
-    # aborted run with its old analysis spec. Bump this value to re-trigger a clean canary. Read by nothing.
-    extraEnv:
-      CANARY_REV: "1"
     db: orders-db
     # on the money path -> gets a PDB + topology spread
     criticalPath: true
