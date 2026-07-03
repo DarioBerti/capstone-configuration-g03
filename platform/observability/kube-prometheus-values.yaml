@@ -1,13 +1,40 @@
-# Helm values for the kube-prometheus-stack install (see justfile `kube-prometheus-install`).
-# Fase 4: ONE deliberate deviation from chart defaults.
+# Helm values for the kube-prometheus-stack install (see justfile `kube-prometheus-install`; on AKS re-run
+# the same `helm upgrade ... -f` after changing this file — the stack is platform-installed, not Argo-managed).
+# Fase 4: TWO deliberate deviations from chart defaults.
 #
-# PodMonitor adoption — by default the chart only adopts PodMonitors labelled `release: kube-prometheus-stack`
+# 1) PodMonitor adoption — by default the chart only adopts PodMonitors labelled `release: kube-prometheus-stack`
 # (podMonitorSelectorNilUsesHelmValues: true). The PodMonitors CNPG generates from `enablePodMonitor: true`
 # carry NO such label (the operator owns them, we can't label them), which is why the cnpg_* metrics never
 # showed up and the CNPG dashboard stayed commented out. Loosen ONLY the PodMonitor selector to adopt all
 # PodMonitors cluster-wide (CNPG DBs + our kafka-exporter / Debezium-Connect monitors, which stay labelled
 # anyway to document intent). ServiceMonitor and PrometheusRule adoption keep the strict release-label
 # convention (values.yaml observability.prometheusRelease) — unchanged.
+#
+# 2) Metric <-> trace correlation (Fase 4 #8, the "last mile"): Tempo becomes a Grafana datasource and
+# Prometheus stores EXEMPLARS — the per-sample `# {trace_id=...}` annotations Micrometer attaches to
+# histogram/counter samples when a span is active. In Grafana a dot on a latency panel then click-throughs
+# to the exact trace in Tempo. Logs stay traceId-ready (ECS JSON carries traceId/spanId); Loki is a
+# documented non-goal for the capstone — correlation there is "grep by traceId".
 prometheus:
   prometheusSpec:
     podMonitorSelectorNilUsesHelmValues: false
+    # exemplar storage is still feature-flagged in Prometheus — without it the scraped exemplars are dropped
+    enableFeatures:
+      - exemplar-storage
+
+grafana:
+  # Tempo as a first-class datasource (uid pinned: the exemplar destination below references it)
+  additionalDataSources:
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      access: proxy
+      url: http://tempo.observability.svc:3100
+  sidecar:
+    datasources:
+      # stamp the DEFAULT Prometheus datasource with the exemplar destination: exemplar dots on panels
+      # link straight to the Tempo trace (trace_id is Micrometer's exemplar label name)
+      exemplarTraceIdDestinations:
+        - datasourceUid: tempo
+          traceIdLabelName: trace_id
+          urlDisplayLabel: View trace in Tempo

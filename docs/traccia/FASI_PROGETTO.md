@@ -93,8 +93,13 @@ Col cutover async, il breaker/bulkhead/retry **sincroni** sono stati **ritirati*
 - ✅ **Cardinalità + sampling (02/07)**: policy in design.md §4-D (uri templated, mai per-partizione/per-pod,
   doppio-scrape a riposo → pannelli throughput in vista stable; identity label NON droppate);
   `tail_sampling` sul Collector gateway (immagine contrib: errori+lenti al 100%, resto 10%).
-- ⬜ **Ultima miglia correlazione (#8, rimandata)**: datasource Tempo in Grafana + exemplar (metric↔trace);
-  Loki opzionale (i log ECS portano già traceId/spanId).
+- ✅ **Ultima miglia correlazione (#8, 03/07)**: Tempo = datasource Grafana (uid pinnato) + **exemplar**
+  (Prometheus `exemplar-storage` + `exemplarTraceIdDestinations` sul datasource di default → il pallino sul
+  pannello apre la traccia in Tempo) — tutto in `kube-prometheus-values.yaml`; su AKS va ri-applicato con
+  l'`helm upgrade -f` (da fare all'avvio della sessione chaos, con verifica visiva del click-through).
+  **Loki = non-goal documentato**: i log ECS portano già traceId/spanId → correlazione log↔trace by-id.
+- ✅ **Cosmetico app chiuso (03/07)**: property OTLP rinominata al nome Boot 4 nei 6 `application.yml`
+  (l'env legacy nel chart è stata rimossa: su Boot 4 non bindava nulla).
 
 ## Fase 5 — Progressive delivery ✅ (Argo Rollouts — VALIDATO LIVE SU AKS 03/07)
 > **Su AKS**: migrazione Deployment→Rollout live; primo ramp reale 5→25→50→100 **gated dall'analysis su

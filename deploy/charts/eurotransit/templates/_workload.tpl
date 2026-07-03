@@ -140,13 +140,11 @@ spec:
             - name: SPRING_PROFILES_ACTIVE
               value: "cluster"
             # OTLP traces -> the otel-collector gateway (root context via .root).
-            # Boot 4 moved the property to management.opentelemetry.tracing.export.otlp.endpoint — without
-            # it bound, OtlpTracingAutoConfiguration creates NO exporter: spans exist in-process (traceId in
-            # the logs) but nothing is ever sent (found live on AKS 02/07, agent-log #23). The old Boot-3
-            # name is kept alongside until the app's application.yml drops its stale key.
+            # NB: this is Boot 4's property name (management.opentelemetry.tracing.export.otlp.endpoint) —
+            # the Boot-3 name (management.otlp.tracing.endpoint) binds NOTHING on Boot 4, and without this
+            # bound OtlpTracingAutoConfiguration creates NO exporter: spans exist in-process (traceId in the
+            # logs) but nothing is ever sent, silently (found live on AKS 02/07, agent-log #23).
             - name: MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT
-              value: {{ .root.Values.global.otlpEndpoint | quote }}
-            - name: MANAGEMENT_OTLP_TRACING_ENDPOINT
               value: {{ .root.Values.global.otlpEndpoint | quote }}
             {{- if .svc.usesKafka }}
             - name: KAFKA_BOOTSTRAP
