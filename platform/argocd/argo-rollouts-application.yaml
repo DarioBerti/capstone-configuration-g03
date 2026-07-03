@@ -1,0 +1,44 @@
+# Argo CD Application for the Argo Rollouts controller (Fase 5 — progressive delivery).
+# GitOps-reconciled like debezium/keycloak-operator: the controller that EXECUTES our release policy is
+# itself declared in Git. Deploys the upstream Helm chart (pinned) into its own namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo-rollouts
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-rollouts
+    # chart 2.41.0 = app v1.9.0. Floor: >= 2.x/app v1.7 — that release added the --traefik-* flags below
+    # (argo-rollouts#3119 / PR #3348); older controllers only speak the retired traefik.containo.us group.
+    targetRevision: 2.41.0
+    helm:
+      valuesObject:
+        controller:
+          # 1 replica (chart default 2 is leader-elected HA): on the 3x B2s_v2 lab cluster we book the
+          # CPU for the money path instead — a controller restart just resumes the Rollout state machine,
+          # in-flight rollouts keep their step/weights (state lives in the Rollout CR, not the pod).
+          replicas: 1
+          extraArgs:
+            # Traefik v3 serves its CRDs under traefik.io; the controller still DEFAULTS to the removed
+            # traefik.containo.us group, so without these flags every TraefikService lookup 404s.
+            - --traefik-api-group=traefik.io
+            - --traefik-api-version=traefik.io/v1alpha1
+        dashboard:
+          # read-only web UI (steps/weights/analysis live) — the demo view. No ingress: port-forward on
+          # demand (`just rollouts-dashboard` -> http://localhost:3100).
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argo-rollouts
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

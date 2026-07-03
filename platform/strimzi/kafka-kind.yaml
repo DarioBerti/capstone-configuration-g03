@@ -62,6 +62,18 @@ spec:
   entityOperator:
     topicOperator: {}
     userOperator: {}
+  # Kafka Exporter also on kind (Fase 4): the chaos dry-runs (exp 04/08) and the Kafka dashboard query
+  # kafka_consumergroup_lag — without the exporter here those queries would hit a metric that does not
+  # exist locally. Same config as prod (see kafka.yaml for the full rationale).
+  kafkaExporter:
+    groupRegex: ".*"
+    topicRegex: ".*"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
 ---
 # The async saga topics (must match platform/strimzi/kafka-topics.yaml, minus the replica count).
 # partitions=3 is fine on one broker (parallelism + per-key ordering); replicas=1 because there is only

@@ -34,3 +34,6 @@ spec:
     transforms.outbox.table.field.event.id: id
     transforms.outbox.table.field.event.type: event_type
     transforms.outbox.table.expand.json.payload: false
+    # Fase 4, cross-Kafka tracing: outbox `traceparent` column → Kafka header (see orders-outbox.yaml for
+    # the full rationale + the deploy-ordering caveat: app migration first, then this).
+    transforms.outbox.table.fields.additional.placement: "traceparent:header"

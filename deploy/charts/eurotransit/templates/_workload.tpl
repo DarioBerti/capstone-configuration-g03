@@ -1,35 +1,92 @@
 {{- /*
-Reusable workload = 1 Deployment + 1 Service for ONE "track" of a service.
+Reusable workload = 1 Deployment OR 1 Argo Rollout + 1 Service for a service.
 
 Args (dict):
   root     = $ (chart root context — inside a define, $ is the dict, so we pass the real root explicitly)
-  name     = metadata name AND the app.kubernetes.io/name selector value (e.g. "orders" or "orders-canary")
+  name     = metadata name AND the app.kubernetes.io/name selector value (e.g. "orders")
   svc      = the service config object (from .Values.services.<x>)
-  tag      = image tag to run (stable: svc.image.tag ; canary: the canary build's tag)
+  tag      = image tag to run (bumped by CI to the commit SHA)
   replicas = (optional) explicit replica count; if unset, the HPA-omit logic on svc applies
+  rollout  = (optional) the svc's `rollout` block. When it carries a strategy ("canary" | "bluegreen") the
+             workload renders as an Argo Rollouts `Rollout` CRD with that strategy instead of a Deployment —
+             SAME pod template, so a progressively-delivered service can never drift from a plain one.
 
-Used by:
-  - deployments.yaml  -> stable track  (name = <svc>,        tag = svc.image.tag)
-  - canary.yaml       -> canary track  (name = <svc>-canary, tag = svc.canary.tag, fixed replicas)
+Used by deployments.yaml for every entry in .Values.services.
 
-WHY one template for both: stable and canary then can NEVER drift (same env/probes/resources). And because
-`name` drives the app.kubernetes.io/name selector, the two tracks get DISTINCT, non-overlapping Services
-(`orders` vs `orders-canary`) — so a weighted TraefikService can split traffic between them, and we never
-touch the stable Deployment's (immutable) selector.
+Progressive delivery (Fase 5): the Rollouts controller manages the ReplicaSets itself (no hand-rolled
+canary/green Deployments): `canary` shifts /api/<svc> traffic through the weighted TraefikService
+`<name>-weighted` (see progressive-delivery.yaml) gated by the background AnalysisRun (analysis.yaml);
+`bluegreen` flips the stable Service's selector to the preview ReplicaSet on promotion. The controller
+patches the Service selectors / TraefikService weights at runtime — the Argo CD app ignores those
+controller-managed fields (see platform/argocd/eurotransit-application.yaml ignoreDifferences).
 */ -}}
 {{- define "eurotransit.serviceWorkload" -}}
+{{- $rollout := .rollout | default dict }}
+{{- $strategy := dig "strategy" "" $rollout }}
+{{- if $strategy }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+{{- else }}
 apiVersion: apps/v1
 kind: Deployment
+{{- end }}
 metadata:
   name: {{ .name }}
   labels:
     {{- include "eurotransit.labels" (dict "svc" .name "root" .root) | nindent 4 }}
 spec:
-  {{- /* explicit replicas (canary) wins; else omit when the HPA owns scaling (Argo vs HPA fight). */}}
+  {{- /* explicit replicas wins; else omit when the HPA owns scaling (Argo vs HPA fight — the HPA's
+         scaleTargetRef follows the workload kind, see hpa.yaml). */}}
   {{- if .replicas }}
   replicas: {{ .replicas }}
   {{- else if not (dig "hpa" "enabled" false .svc) }}
   replicas: {{ .svc.replicaCount }}
+  {{- end }}
+  {{- if eq $strategy "canary" }}
+  strategy:
+    canary:
+      # the two Services traffic is split between; Rollouts pins each to its ReplicaSet by injecting the
+      # rollouts-pod-template-hash into their selectors (both are declared with the plain stable selector)
+      stableService: {{ .name }}
+      canaryService: {{ .name }}-canary
+      trafficRouting:
+        traefik:
+          # the weighted TraefikService (progressive-delivery.yaml) whose weights the controller drives
+          weightedTraefikServiceName: {{ .name }}-weighted
+      {{- if dig "canary" "analysis" "enabled" false $rollout }}
+      # background analysis: runs from the first weight step onward; a failure AUTO-ABORTS the rollout
+      # (traffic back to stable). Templates in analysis.yaml (canary-scoped SLO + consumer failures).
+      analysis:
+        templates:
+          - templateName: {{ .name }}-canary-slo
+        startingStep: 1
+      {{- end }}
+      steps:
+        {{- range dig "canary" "steps" (list) $rollout }}
+        {{- if .canaryReplicas }}
+        # pin the canary ReplicaSet size (bounds the Kafka consumer-side exposure of the canary code)
+        - setCanaryScale:
+            replicas: {{ .canaryReplicas }}
+        {{- end }}
+        {{- if .matchTrafficWeight }}
+        # release the pin: from here the canary scales with its traffic share
+        - setCanaryScale:
+            matchTrafficWeight: true
+        {{- end }}
+        - setWeight: {{ .weight }}
+        {{- if .pause }}
+        - pause:
+            duration: {{ .pause }}
+        {{- end }}
+        {{- end }}
+  {{- else if eq $strategy "bluegreen" }}
+  strategy:
+    blueGreen:
+      # promotion = the controller atomically re-points the ACTIVE Service's selector to the preview
+      # ReplicaSet; the preview Service lets the candidate be smoke-tested in-cluster before the flip
+      activeService: {{ .name }}
+      previewService: {{ .name }}-preview
+      autoPromotionEnabled: {{ dig "bluegreen" "autoPromotionEnabled" false $rollout }}
   {{- end }}
   selector:
     matchLabels:
@@ -82,7 +139,13 @@ spec:
             # in-cluster Spring profile (quiet SQL, hidden health details)
             - name: SPRING_PROFILES_ACTIVE
               value: "cluster"
-            # OTLP traces -> the otel-collector gateway (root context via .root)
+            # OTLP traces -> the otel-collector gateway (root context via .root).
+            # Boot 4 moved the property to management.opentelemetry.tracing.export.otlp.endpoint — without
+            # it bound, OtlpTracingAutoConfiguration creates NO exporter: spans exist in-process (traceId in
+            # the logs) but nothing is ever sent (found live on AKS 02/07, agent-log #23). The old Boot-3
+            # name is kept alongside until the app's application.yml drops its stale key.
+            - name: MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT
+              value: {{ .root.Values.global.otlpEndpoint | quote }}
             - name: MANAGEMENT_OTLP_TRACING_ENDPOINT
               value: {{ .root.Values.global.otlpEndpoint | quote }}
             {{- if .svc.usesKafka }}

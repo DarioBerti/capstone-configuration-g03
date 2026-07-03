@@ -23,6 +23,16 @@ metadata:
 spec:
   instances: {{ .Values.keycloak.instances }}
   image: {{ .Values.keycloak.image }}
+  # Right-size the booking (found live on AKS 02/07): the operator DEFAULT requests 1700Mi, which the
+  # realm-import Job inherits too — on the fully-booked 3x B2s_v2 pool neither fit a node. Real usage is
+  # ~600-700Mi with the default heap (relative to the limit below). Same scheduler-booking-vs-usage class
+  # of fix as the Fase-4 CPU one: shrink the reservation, keep a hard memory ceiling.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 700Mi
+    limits:
+      memory: 1400Mi
   # We pin the STOCK Keycloak image (not a pre-augmented one). Setting spec.image makes the operator
   # assume the image is already optimized and skip the build, so --db=postgres (a build-time option)
   # never gets applied and the server aborts (exit 2). startOptimized=false forces the operator to run

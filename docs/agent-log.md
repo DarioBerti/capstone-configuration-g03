@@ -437,3 +437,99 @@ the three cutover agents produced, and how each was caught and resolved — the 
 
 _Add new entries as they happen. Aim well past the required three; every caught mistake is
 evidence of ownership._
+
+## 20. Fase 5 — the agent's manual canary was itself hand-rolled infrastructure, and it missed the consumer-group semantics
+
+Two related misses in the agent-designed first version of Fase 5 (weighted TraefikService with the weight
+edited in `values.yaml`), both caught on 02/07 during the prod-grade re-evaluation:
+
+- **The mechanism violated our own "no hand-rolled infra" rule — and the agent presented it as a virtue.**
+  The manual design was pitched as "GitOps-native canary" (peso = commit, auditabile). Re-examined, the
+  *promotion controller* of that design was a human watching Grafana and committing weight bumps — i.e. the
+  control loop of progressive delivery re-implemented by hand, the same bias class as the polling outbox
+  relay that Debezium replaced (#18-adjacent). No automated analysis meant no reaction to a canary burning
+  error budget at 3am. **Fix:** Argo Rollouts (pinned chart 2.41.0/app v1.9.0): policy in Git (steps, pauses,
+  AnalysisTemplate queries), execution by the controller; every CI tag bump is now an SLO-gated release with
+  automatic abort. **Caught:** team prod-grade audit, not by the agent unprompted.
+- **The agent validated canary + blue/green live without noticing they only govern the HTTP intake.** In the
+  async saga, canary/green pods join the SAME Kafka consumer group as stable: at weight 0 the canary still
+  advances real orders (its listeners consume saga replies), and a full-capacity green consumes ~half the
+  partitions BEFORE the "atomic" switch — so the old docs' "esposizione controllata" / "cutover atomico"
+  claims were silently intake-only, and a state-machine bug in green would touch real orders at 0% traffic.
+  The 30/06 live validation (12/24 split, colour flip) measured exactly what the design promised and so
+  couldn't surface what it didn't promise. **Fix:** documented as a release rule (event compatibility between
+  adjacent versions, design.md §4-D), canary consumer exposure bounded via `setCanaryScale: 1`, and the
+  Rollouts analysis gates on the canary pods' Kafka listener failure rate — the consumer-side signal no HTTP
+  weight can canary. **Lesson:** validating that a mechanism does what its design says is necessary but not
+  sufficient — the graded question is what the design *fails to say*.
+
+## 21. Fase 4 — four contract mismatches caught while implementing the observability additions (02/07)
+
+The Phase-4 handoff doc (agent-assisted) and the two sibling PRs carried four subtle cross-artifact
+mismatches; all were caught by checking each query/option against the thing that actually emits it:
+
+- **PR 17's lag queries use a label the exporter never emits.** The runbooks (exp 01/04/08) query
+  `kafka_consumergroup_lag{group="..."}`, but the Strimzi kafka-exporter's native label is
+  **`consumergroup`** (our own Kafka dashboard uses it correctly). The handoff doc even picked the exporter
+  *"so the runbook queries work"* — they still wouldn't have. **Fix:** metricRelabeling on the exporter
+  PodMonitor copies `consumergroup`→`group` (both selectors resolve, zero extra series) + this note; the
+  runbooks should still be normalized to `consumergroup` in PR 17 review (owner notified).
+- **The handoff doc prescribed a Debezium option that does not exist.** It said to map the trace context via
+  `table.field.event.headers`; the Outbox Event Router has no such option — the real one is
+  **`table.fields.additional.placement: "traceparent:header"`**. Applied verbatim, the connector config
+  would have been silently ignored or rejected. **Caught:** checked against the Debezium EventRouter
+  reference before editing the connectors.
+- **The doc's relabel policy would have corrupted multi-replica series.** It said to drop
+  `pod, instance, endpoint, container` on the app ServiceMonitors. `pod`/`instance` are the only labels
+  distinguishing two replicas of the same service: dropping both collapses their series into one identity →
+  duplicate-sample ingestion errors (orders runs multi-replica + canary). **Fix:** identity labels stay on
+  app monitors; `pod` is dropped ONLY on the kafka-exporter monitor (cluster-level metrics, restart churn);
+  cardinality is enforced by templated `uri`, recording rules and panel grouping (design.md §4-D).
+- **Enabling listener observation (needed for cross-Kafka traces) can silently neuter PR 16's canary gate.**
+  With `spring.kafka.listener.observation-enabled: true`, the `spring.kafka.listener` timer is produced by
+  the Observation API, whose tag set differs from the legacy MicrometerHolder timer (`error="..."` instead of
+  `result="success|failure"`). PR 16's `canary-consumer-failures` gate filters `result="failure"` with an
+  `or vector(0)` fallback — if the tag vanishes the gate would *always pass* and never abort a bad canary.
+  **Status:** verification step, not yet a confirmed defect — after deploying the app branch, scrape
+  `/actuator/prometheus` and check the tag set; if `result` is gone, the gate selector must move to the
+  observation tags (PR 16 owner notified).
+
+## 22. Fase 4/5 integration — the listener metric's tag scheme changed under the canary gate (predicted by #21, confirmed live)
+
+Emanuele's #21 flagged the risk; the first AKS deploy of the merged stack confirmed it: enabling listener
+OBSERVATIONS for the cross-Kafka tracing (app PR #10) replaces plain-Micrometer's
+`spring_kafka_listener_seconds{result="success|failure"}` with the Observation convention
+`spring_kafka_listener_seconds{error="none|<ExceptionClass>"}` (plus a separate `_active_` long-task timer).
+The Fase-5 canary analysis gate #3 and chaos runbook 08 still queried `result="failure"` — an always-empty
+query whose `or vector(0)` guard made the gate silently INERT (never aborts, never false-aborts: fail-safe
+but void). **Fix:** queries moved to `error!="none"` (config main, post-merge integration commit).
+**Lesson:** a metric is an API between repos — when an app-side dependency changes an instrumentation mode,
+grep the CONFIG repo for consumers of the affected metric before merging (the two PRs were reviewed
+separately and each was correct in isolation).
+
+## 23. Fase 4 live — spans created but never exported: Boot 4 renamed the OTLP endpoint property
+
+First AKS run of the merged tracing stack: traceId/spanId present in every ECS log line (tracer active,
+sampling 1.0) yet the collector counted zero received spans and no service logged an export error. Root
+cause: Boot 4 moved the OTLP tracing endpoint from `management.otlp.tracing.endpoint` (the property both the
+app yml and the chart env used) to `management.opentelemetry.tracing.export.otlp.endpoint` — with nothing
+bound there, `OtlpTracingAutoConfiguration` creates NO exporter at all, which is why the failure was silent
+(no exporter = no export attempts = no errors; the classic misconfiguration would at least have produced
+connection-refused noise). **Fix:** the chart now injects the Boot-4 property name (old name kept alongside
+until the app yml drops its stale key — app-repo follow-up). **Lesson:** completes the #21→#22 chain — the
+same Boot-4 modularization that made the deps inert also renamed the properties; when a majour-version
+framework migration touches observability, validate the SINK receives data, not only that the app "has"
+tracing (in-process evidence like log traceIds proves the tracer, not the pipeline).
+
+## 24. Fase 5 live — the first real AKS canary auto-aborted on a NaN false positive (the mechanism worked, the signal lied)
+
+First template-change rollout on AKS with analysis enabled: the controller aborted at step 0 — weights back
+to 100/0 stable with zero human action, which is the Fase-5 mechanism proven live — but the failed gate was
+a false positive. The success-rate query guards the no-traffic case with `or vector(1)`, which only fires
+when the result is EMPTY (no series). The canary had received a handful of early requests, so its series
+EXISTED; when the smoke token expired mid-ramp (401s land on uri="UNKNOWN", outside the query) the 2m rate
+windows went 0/0 = **NaN — a present sample the vector() guard cannot replace**, and `NaN >= 0.99` is false:
+4 consecutive Failed measurements -> abort. **Fix:** `isNaN(result[0]) || ...` in every successCondition
+(the pattern Argo Rollouts documents for exactly this). **Lesson:** PromQL has TWO distinct "no data"
+shapes — empty vector and NaN sample — and a gate must be immune to both; a canary with no traffic is
+"no evidence of failure", never "failure".

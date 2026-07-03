@@ -19,6 +19,13 @@ spec:
   offsetStorageTopic: debezium-connect-offsets
   configStorageTopic: debezium-connect-configs
   statusStorageTopic: debezium-connect-status
+  # Fase 4 — CDC monitoring, same as prod (../connect-metrics.yaml is applied by `just debezium-kind-apply`)
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom:
+      configMapKeyRef:
+        name: debezium-connect-metrics
+        key: metrics-config.yml
   config:
     # single-node kind: RF=1 (matches kafka-kind.yaml)
     config.storage.replication.factor: 1

@@ -1,0 +1,121 @@
+# Fase 4 — Prometheus wiring for the CDC pipeline: PodMonitor on the Connect workers (JMX metrics from
+# connect-metrics.yaml) + PrometheusRules for the two CDC failure modes. In prod this file is reconciled
+# by the debezium Argo Application; on kind it is applied by `just observability-install` (it needs the
+# kube-prometheus-stack CRDs, so it cannot ride along with `just debezium-kind-apply`).
+#
+# Why these alerts (docs/design.md §4-D): after the CDC cutover events reach Kafka ONLY via Debezium
+# reading the WAL. A dead connector or a lost/stalled replication slot = the outbox fills in the DB and
+# nothing publishes while the intake still returns 202 — the money path stalls SILENTLY. Both conditions
+# need a human (Connect self-heals worker loss via rebalance — exp 06 — but a FAILED connector or a slot
+# left behind by a CNPG failover — exp 05, PG16 has no native slot failover — do not fix themselves).
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: debezium-connect
+  namespace: kafka
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: eurotransit
+spec:
+  selector:
+    matchLabels:
+      strimzi.io/cluster: debezium-connect
+      strimzi.io/kind: KafkaConnect
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 15s
+      # NOTE: unlike the kafka-exporter monitor, `pod` is deliberately KEPT here — per-worker task
+      # placement (which worker runs the connector task) is exactly the signal chaos exp 06 watches.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: eurotransit-cdc
+  namespace: kafka
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: eurotransit
+spec:
+  groups:
+    - name: eurotransit-cdc
+      rules:
+        # ── failure mode 1: connector/task not RUNNING ──
+        # The JMX rules emit the CURRENT state as a labelled gauge=1, so "not running" = a series with a
+        # non-running status label exists (max across workers: after a rebalance stale pods drop off).
+        - alert: CDCConnectorNotRunning
+          expr: |
+            max by (connector, status) (kafka_connect_connector_status{status!="running"}) == 1
+            or
+            max by (connector, task, status) (kafka_connect_connector_task_status{status!="running"}) == 1
+          for: 2m
+          labels:
+            severity: page
+            part_of: eurotransit
+          annotations:
+            summary: "CDC connector {{ $labels.connector }} is {{ $labels.status }}"
+            description: >-
+              The Debezium connector (or one of its tasks) is not RUNNING: that service's outbox is no
+              longer published to Kafka while the intake keeps accepting orders (silent money-path stall).
+              Check `kubectl -n kafka get kafkaconnector -o wide` and the worker logs; a FAILED state does
+              not self-heal — restart the connector after fixing the cause.
+        # 2-minute `for` so a transient worker-loss rebalance (exp 06 recovers in seconds) does not page.
+        # ── failure mode 1b: CDC metrics gone entirely (all workers down / scrape broken) ──
+        - alert: CDCMetricsAbsent
+          expr: absent(kafka_connect_connector_status)
+          for: 5m
+          labels:
+            severity: page
+            part_of: eurotransit
+          annotations:
+            summary: "No CDC connector metrics are being scraped"
+            description: >-
+              kafka_connect_connector_status vanished from Prometheus: every Connect worker is down or the
+              scrape is broken. Either way the CDC pipeline state is unknown — treat as a money-path stall.
+        # ── failure mode 2: replication slot lost or retaining WAL ──
+        # Metrics come from the CNPG instance exporter (enablePodMonitor: true on the DB clusters).
+        # After a CNPG failover the logical slot does NOT exist on the new primary (PG16, no native slot
+        # failover — see ../..//deploy/charts/eurotransit/templates/databases.yaml): the slot count drops
+        # below 3 until it is recreated. Chaos exp 05 verifies exactly this alert.
+        - alert: CDCReplicationSlotMissing
+          expr: |
+            count(count by (slot_name) (cnpg_pg_replication_slots_active{slot_name=~".+_outbox"})) < 3
+          for: 2m
+          labels:
+            severity: page
+            part_of: eurotransit
+          annotations:
+            summary: "A Debezium replication slot is missing (found fewer than 3 *_outbox slots)"
+            description: >-
+              One of orders_outbox / inventory_outbox / payments_outbox no longer exists — typical after a
+              CNPG failover promoted a standby (PG16 logical slots do not fail over). Outbox rows are safe
+              in the DB but are NOT reaching Kafka. Recreate the slot on the new primary (or restart the
+              connector so it recreates it), then confirm the connector returns to RUNNING.
+        - alert: CDCReplicationSlotInactive
+          expr: |
+            max by (slot_name) (cnpg_pg_replication_slots_active{slot_name=~".+_outbox"}) == 0
+          for: 5m
+          labels:
+            severity: page
+            part_of: eurotransit
+          annotations:
+            summary: "Replication slot {{ $labels.slot_name }} exists but has no consumer"
+            description: >-
+              The slot is present but nothing is streaming from it (connector down or stuck): the slot pins
+              WAL on the primary and the outbox is not being published. Check the matching KafkaConnector.
+        - alert: CDCReplicationSlotRetainingWAL
+          expr: |
+            max by (slot_name) (cnpg_pg_replication_slots_pg_wal_lsn_diff{slot_name=~".+_outbox"}) > 268435456
+          for: 10m
+          labels:
+            severity: page
+            part_of: eurotransit
+          annotations:
+            summary: "Slot {{ $labels.slot_name }} is retaining {{ $value | humanize1024 }}B of WAL"
+            description: >-
+              Retained WAL passed 256Mi — halfway to the 512Mi max_slot_wal_keep_size safety valve, after
+              which Postgres INVALIDATES the slot and CDC needs a manual resync. The consumer is not
+              keeping up or is stopped: fix the connector before the cap is hit.
+        # Debezium streaming lag (debezium_metrics_millisecondsbehindsource) is DASHBOARD-ONLY by design:
+        # it self-heals when the connector catches up; the alerts above cover the states needing a human.

@@ -3,6 +3,9 @@
 # Goal: prove synchronous replication (inventory-db: 3 instances, dataDurability=required -> RPO=0) means a
 # primary loss costs a brief write stall during promotion but loses NO committed reservation, so "never
 # oversell" still holds and the intake SLI recovers within RTO <= 60 s.
+# NEW (async cutover): ALSO verify the Debezium CDC resumes — the PG16 logical slot dies with the old
+# primary; the connector must reconnect via -rw, recreate the slot, and the sweeper covers the gap
+# (runbook part 2; the PG17 failover-slot upgrade raises this bar to zero-gap — decision pending).
 #
 # Kill the PRIMARY pod only. CNPG labels the current primary with `role: primary` (and, on newer operators,
 # also `cnpg.io/instanceRole: primary`). Verify the label before running:

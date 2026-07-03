@@ -49,3 +49,12 @@ spec:
     transforms.outbox.table.field.event.type: event_type
     # keep payload as the raw JSON string the consumers already parse — do NOT expand it into a struct
     transforms.outbox.table.expand.json.payload: false
+    # ── Fase 4, cross-Kafka tracing: put the outbox row's `traceparent` column into a Kafka header ──
+    # Debezium is the producer here (not the app's KafkaTemplate), so in-process tracing instrumentation is
+    # bypassed: the W3C context saved by the app in the outbox row (same tx) is the ONLY way the trace can
+    # cross this hop. Consumers continue it via spring.kafka.listener.observation-enabled.
+    # Syntax is field:placement (header name = column name). NULL traceparent (e.g. a sweeper re-drive with
+    # no active span) simply yields no usable header → the consumer starts a fresh root trace.
+    # ORDER MATTERS: the app migration adding the column must be deployed BEFORE this config lands, or the
+    # SMT fails on the missing field (CDCConnectorNotRunning would page).
+    transforms.outbox.table.fields.additional.placement: "traceparent:header"

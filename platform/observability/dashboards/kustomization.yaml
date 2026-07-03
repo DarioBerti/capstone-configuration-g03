@@ -31,12 +31,13 @@ configMapGenerator:
   - name: eurotransit-dashboard-runtime
     files:
       - eurotransit-runtime.json
-  # NOT wired by default: these two depend on metrics from exporters we have not confirmed are scraped
-  # (kafka-exporter / Micrometer Kafka binder for lag; CNPG PodMonitor for cnpg_*). The JSON ships ready;
-  # uncomment once the source metrics show up in Prometheus, so we never publish empty-looking dashboards.
-  # - name: eurotransit-dashboard-kafka
-  #   files:
-  #     - eurotransit-kafka.json
-  # - name: eurotransit-dashboard-cnpg
-  #   files:
-  #     - eurotransit-cnpg.json
+  # Fase 4: both metric sources are now wired — kafka-exporter on the Kafka CRs (kafka.yaml/kafka-kind.yaml,
+  # scraped by platform/strimzi/monitoring.yaml) and the CNPG PodMonitors (adopted via
+  # kube-prometheus-values.yaml podMonitorSelectorNilUsesHelmValues=false). The kafka dashboard also carries
+  # the DLT-depth and CDC (Connect/Debezium) panels backed by platform/debezium/monitoring.yaml.
+  - name: eurotransit-dashboard-kafka
+    files:
+      - eurotransit-kafka.json
+  - name: eurotransit-dashboard-cnpg
+    files:
+      - eurotransit-cnpg.json

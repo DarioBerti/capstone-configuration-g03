@@ -31,27 +31,41 @@ Safety / bullet-proofing:
 {{- $successTarget := $obs.checkoutSuccessTarget }}
 {{- /* p99 ack-latency objective in SECONDS for the intake POST /api/orders. */}}
 {{- $latencyP99Seconds := $obs.checkoutAckP99Seconds }}
+{{- /* Fase 4: saga-completion target — fraction of accepted orders that must reach a terminal state. */}}
+{{- $sagaTerminalTarget := $obs.sagaTerminalTarget | default "0.99" }}
 
-{{- /* One ServiceMonitor per service: scrape its /actuator/prometheus on the named http port. */}}
+{{- /* One ServiceMonitor per service: scrape its /actuator/prometheus on the named http port.
+       Fase 5: a progressively-delivered service gets a SECOND monitor for its canary/preview Service —
+       those pods' series then carry service="<svc>-canary"/"<svc>-preview", which is what makes the
+       canary-scoped AnalysisTemplate queries (analysis.yaml) and a pre-flip look at the preview possible.
+       Off-rollout the extra Service selects the same (stable) pods; the duplicate scrape is harmless
+       (distinct `service` label = distinct series, and the SLO rules below aggregate over uri only). */}}
 {{- range $name, $svc := .Values.services }}
+{{- $strategy := dig "rollout" "strategy" "" $svc }}
+{{- $tracks := list $name }}
+{{- if eq $strategy "canary" }}{{ $tracks = append $tracks (printf "%s-canary" $name) }}{{ end }}
+{{- if eq $strategy "bluegreen" }}{{ $tracks = append $tracks (printf "%s-preview" $name) }}{{ end }}
+{{- range $track := $tracks }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ $name }}
+  name: {{ $track }}
   labels:
     # part-of ties it to our app; `release` is what the kube-prometheus-stack matches on to adopt this monitor
     app.kubernetes.io/part-of: eurotransit
     release: {{ $release }}
 spec:
-  # pick the Service of THIS service (same stable selector labels the Service/Deployment use)
+  # pick the Service of THIS track by its name label (the canary/preview Services differ from stable in
+  # their labels; their selectors are runtime-managed by Argo Rollouts — see progressive-delivery.yaml)
   selector:
     matchLabels:
-      {{- include "eurotransit.selectorLabels" (dict "svc" $name) | nindent 6 }}
+      {{- include "eurotransit.selectorLabels" (dict "svc" $track) | nindent 6 }}
   endpoints:
     - port: http                      # the Service port is named "http" -> scrape there
       path: /actuator/prometheus      # Micrometer's Prometheus endpoint (exposed by Actuator)
       interval: 15s                   # scrape cadence
+{{- end }}
 {{- end }}
 ---
 # All the checkout SLO logic in one rule object: recording rules pre-compute the error ratio over each window,
@@ -132,4 +146,55 @@ spec:
           annotations:
             summary: "Checkout intake ack p99 above objective"
             description: "The synchronous POST /api/orders ack p99 has stayed above the latency objective for 10m; the intake itself is slow (independent of the async saga)."
+
+    # ── Fase 4: saga-completion SLI ──────────────────────────────────────────────────────────────────────
+    # The intake SLO above only sees the front door: after the async cutover a 202 no longer means the
+    # order completed (an order can be accepted and then stall in the saga with ZERO 5xx and ZERO lag).
+    # This group watches the only directly user-visible symptom of the async pipeline: orders that never
+    # reach a terminal state. Consumer lag / DLT depth / CDC state (platform/ rules) are the DIAGNOSTICS
+    # underneath it — this is what resolves the "never alert on raw lag" tension: page on completion.
+    - name: eurotransit-saga-slo
+      rules:
+        # Terminal ratio: accepted orders that reached CONFIRMED **or** REJECTED. Terminal — not confirmed —
+        # because SOLD_OUT / PAYMENT_DECLINED are correct saga outcomes (the user got an answer); paging on
+        # them would alert a human for business reality. The confirmed-only ratio below is dashboard-only.
+        # The denominator is shifted by 3m (> the 2m OrderTimeoutSweeper deadline) so every order counted
+        # as "accepted" had time to finish; completions of the freshest orders can push the ratio slightly
+        # above 1 — harmless for a `<` alert. NaN when idle (0/0) never fires an alert.
+        - record: checkout_saga:terminal_ratio:rate30m
+          expr: |
+            (
+              sum(increase(orders_confirmed_total[30m]))
+                +
+              sum(increase(orders_rejected_total[30m]))
+            )
+              /
+            sum(increase(orders_placed_total[30m] offset 3m))
+        # Business view (dashboard-only, used by the RED dashboard saga row — never alerted on):
+        - record: checkout_saga:confirmed_ratio:rate30m
+          expr: |
+            sum(increase(orders_confirmed_total[30m]))
+              /
+            sum(increase(orders_placed_total[30m] offset 3m))
+        - alert: CheckoutSagaCompletionLow
+          expr: checkout_saga:terminal_ratio:rate30m < {{ $sagaTerminalTarget }}
+          for: 10m
+          labels:
+            severity: page
+            slo: checkout-saga-completion
+          annotations:
+            summary: "Accepted orders are not reaching a terminal state (ratio {{ `{{ $value | humanize }}` }})"
+            description: "Less than {{ $sagaTerminalTarget }} of accepted orders reached CONFIRMED/REJECTED within the saga deadline over 30m. Users got a 202 but no outcome. Diagnose with the Kafka dashboard (consumer lag, DLT depth) and the CDC alerts (connector/slot state)."
+        # Direct stuck-order symptom from the OrderTimeoutSweeper (gauge = non-terminal orders past the
+        # deadline found by the last sweep). Catches a total stall even at zero traffic, where the ratio
+        # above would be NaN. max() because every orders replica sweeps the same DB (same value each).
+        - alert: CheckoutSagaOrdersStuck
+          expr: max(orders_overdue_nonterminal) > 0
+          for: 5m
+          labels:
+            severity: page
+            slo: checkout-saga-completion
+          annotations:
+            summary: "{{ `{{ $value }}` }} order(s) stuck past the saga deadline"
+            description: "The OrderTimeoutSweeper keeps finding orders stuck non-terminal past the 2m deadline: re-driving is not resolving them. Something on the money path is down (consumer, Kafka, CDC) — check the Kafka/CDC dashboards and DLT depth."
 {{- end }}

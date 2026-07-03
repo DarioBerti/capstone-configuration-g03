@@ -1,0 +1,71 @@
+# JMX → Prometheus rules for the Debezium Kafka Connect cluster (Fase 4 — CDC monitoring).
+# Referenced by spec.metricsConfig of BOTH KafkaConnect CRs (kafka-connect.yaml and kind/): Strimzi runs
+# the JMX Prometheus agent in the Connect JVM and exposes these series on :9404 (port `tcp-prometheus`),
+# scraped by the PodMonitor in monitoring.yaml.
+#
+# Why: after the CDC cutover, events reach Kafka ONLY via Debezium reading the WAL. A stopped connector or
+# a stuck task = the outbox fills in the DB and nothing publishes, while the intake still returns 202 — a
+# silent money-path stall. These rules expose exactly the two signals the alerts need:
+#   - connector/task state as a gauge  -> kafka_connect_connector_status / _task_status{status=...} = 1
+#   - Debezium streaming health        -> debezium_metrics_millisecondsbehindsource{server=...}
+# Applied by Argo in prod (this dir is the debezium Application); on kind by `just debezium-kind-apply`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: debezium-connect-metrics
+  namespace: kafka
+  labels:
+    app.kubernetes.io/part-of: eurotransit
+data:
+  metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+      # ── Connect connector / task state (string attribute → gauge=1 with a `status` label) ──
+      # kafka.connect:type=connector-metrics,connector=orders-outbox  attribute status="running|failed|paused|..."
+      - pattern: 'kafka.connect<type=connector-metrics, connector=(.+)><>status: ([a-z-]+)'
+        name: kafka_connect_connector_status
+        value: 1
+        labels:
+          connector: "$1"
+          status: "$2"
+        help: "State of a Connect connector (1 for the current status label)"
+        type: gauge
+      # kafka.connect:type=connector-task-metrics,connector=...,task=N  attribute status
+      - pattern: 'kafka.connect<type=connector-task-metrics, connector=(.+), task=(\d+)><>status: ([a-z-]+)'
+        name: kafka_connect_connector_task_status
+        value: 1
+        labels:
+          connector: "$1"
+          task: "$2"
+          status: "$3"
+        help: "State of a Connect connector task (1 for the current status label)"
+        type: gauge
+      # ── Task error counters (retries, record failures, records sent to Connect's own DLQ) ──
+      - pattern: 'kafka.connect<type=task-error-metrics, connector=(.+), task=(\d+)><>([a-z-]+)'
+        name: kafka_connect_task_error_$3
+        labels:
+          connector: "$1"
+          task: "$2"
+        help: "Connect task error metric $3"
+        type: gauge
+      # ── Worker-level totals (connector-count, task-count, rebalances) — per-pod placement view (exp 06) ──
+      - pattern: 'kafka.connect<type=connect-worker-metrics><>([a-z-]+)'
+        name: kafka_connect_worker_$1
+        help: "Connect worker metric $1"
+        type: gauge
+      - pattern: 'kafka.connect<type=connect-worker-rebalance-metrics><>([a-z-]+)'
+        name: kafka_connect_worker_rebalance_$1
+        help: "Connect worker rebalance metric $1"
+        type: gauge
+      # ── Debezium streaming metrics, one series set per connector (server = topic.prefix) ──
+      # debezium.postgres:type=connector-metrics,context=streaming,server=orders
+      # → debezium_metrics_millisecondsbehindsource{plugin="postgres",context="streaming",server="orders"}
+      #   (also: connected 0/1, totalnumberofeventsseen, queueremainingcapacity, ...)
+      - pattern: 'debezium.([a-z]+)<type=connector-metrics, context=([a-z-]+), server=([^,]+)><>([A-Za-z]+)'
+        name: debezium_metrics_$4
+        labels:
+          plugin: "$1"
+          context: "$2"
+          server: "$3"
+        help: "Debezium $1 connector metric $4"
+        type: gauge

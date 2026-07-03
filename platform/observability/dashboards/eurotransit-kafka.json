@@ -1,7 +1,7 @@
 {
   "uid": "eurotransit-kafka",
-  "title": "EuroTransit — Kafka consumer lag",
-  "tags": ["eurotransit", "kafka", "lag"],
+  "title": "EuroTransit — Kafka & CDC (money-path pipeline)",
+  "tags": ["eurotransit", "kafka", "lag", "cdc", "dlt"],
   "timezone": "browser",
   "schemaVersion": 39,
   "editable": true,
@@ -41,11 +41,11 @@
     {
       "id": 1,
       "type": "text",
-      "title": "Prerequisite",
+      "title": "Signal roles (Fase 4)",
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "options": {
         "mode": "markdown",
-        "content": "**Empty panels?** This dashboard needs a consumer-lag source. Either enable the Strimzi **kafka-exporter** on the Kafka CR (exposes `kafka_consumergroup_lag`) and scrape it, or enable the apps' **Micrometer Kafka binder** (`kafka_consumer_fetch_manager_records_lag`, already scraped via our ServiceMonitors). Consumer lag is the leading indicator of pipeline latency — it rises before user-visible delay."
+        "content": "Sources: Strimzi **kafka-exporter** (`kafka_consumergroup_lag`, DLT offsets — enabled on the Kafka CR, scraped by `platform/strimzi/monitoring.yaml`) and **Connect JMX** (`kafka_connect_*`, `debezium_metrics_*` — `platform/debezium/monitoring.yaml`). Roles: **consumer lag = diagnostic only** (self-drains; never paged). **DLT depth and CDC state PAGE** (`DeadLetterTopicNotEmpty`, `CDCConnectorNotRunning`, slot alerts) — they do not self-heal. The user-visible symptom is the saga-completion SLI on the RED dashboard. Aggregate by group/topic, never by partition (cardinality)."
       }
     },
     {
@@ -83,11 +83,79 @@
       ]
     },
     {
+      "id": 5,
+      "type": "timeseries",
+      "title": "DLT depth (messages) — PAGE when > 0: failed orders needing a human",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "eurotransit_dlt:depth:sum",
+          "legendFormat": "{{topic}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "CDC connector / task state (1 = current status) — PAGE when not running",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "max by (connector, status) (kafka_connect_connector_status)",
+          "legendFormat": "{{connector}}: {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Debezium — milliseconds behind source (streaming lag, self-heals)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "max by (server) (debezium_metrics_millisecondsbehindsource{context=\"streaming\"})",
+          "legendFormat": "{{server}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Replication slot retained WAL (bytes) — slot invalidated at 512Mi",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "max by (slot_name) (cnpg_pg_replication_slots_pg_wal_lsn_diff{slot_name=~\".+_outbox\"})",
+          "legendFormat": "{{slot_name}}"
+        }
+      ]
+    },
+    {
       "id": 4,
       "type": "timeseries",
-      "title": "Consumer lag (records) — Micrometer binder (alt source)",
+      "title": "Consumer lag (records) — Micrometer binder (alt source, in-app view)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 13 },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 29 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
       "targets": [

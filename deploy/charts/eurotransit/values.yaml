@@ -31,7 +31,6 @@ global:
     issuer: https://auth.g03.cpo2026.it/realms/eurotransit
     jwkSetUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/certs
     tokenUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/token
-
 # Debug SPA hosted IN-CLUSTER (nginx serving the Vite build). DEV/kind convenience so the app can be
 # exercised end-to-end without running services locally; the ingress (gated on the same flag) also adds
 # the SPA's "/" route plus the internal /api/inventory + /api/payments prefixes. OFF in base/prod: the
@@ -45,7 +44,6 @@ frontend:
   replicaCount: 1
   # cluster Service port (nginx listens on 80 inside the pod)
   port: 80
-
 # Keycloak (OIDC identity provider), run by the Keycloak Operator (installed separately as a platform
 # component — see platform/argocd/keycloak-operator-application.yaml). The Keycloak CR + realm import live
 # in THIS chart so they share the eurotransit namespace and the shared catalog Postgres instance.
@@ -61,20 +59,19 @@ keycloak:
   db:
     host: catalog-db-rw.eurotransit.svc
     name: keycloakdb
-    secret: keycloak-db            # keys: username, password (also used by the CNPG managed role)
+    secret: keycloak-db # keys: username, password (also used by the CNPG managed role)
   # secret holding the bootstrap admin user (keys: username, password). MUST NOT be named
   # "<keycloak-cr-name>-initial-admin" (i.e. keycloak-initial-admin): that name is reserved for the
   # secret the operator generates itself, and a collision makes the operator's reconcile 409 and abort.
   adminSecret: keycloak-bootstrap-admin
   # LOCAL-ONLY: render plain Secrets so kind works without kubeseal. MUST stay false in this base file;
-  # in prod the three secrets (keycloak-db, keycloak-bootstrap-admin, orders-oidc) are committed as
+  # in prod the secrets (keycloak-db, keycloak-bootstrap-admin) are committed as
   # SealedSecrets (see platform/keycloak/README.md). values-kind.yaml flips this to true.
   devSecrets: false
   dev:
     adminUsername: admin
     adminPassword: admin
     dbPassword: keycloak-dev-pass
-    ordersClientSecret: dev-orders-svc-secret
   # Frontend (SPA) client knobs. Base = prod only: the public domain is always allowed; dev appends
   # localhost in values-kind.yaml. directAccessGrants stays OFF in prod (no password grant on a public
   # client) — kind turns it on so test accounts can mint a token via curl.
@@ -86,7 +83,6 @@ keycloak:
   # values-kind.yaml populates it so a fresh kind cluster has ready-to-use logins. Each entry:
   #   { username, email, firstName, lastName, password, roles: [USER|ADMIN ...] }
   testUsers: []
-
 # Per-service desired state
 # "db" references a database name in ".databases" (or null)
 # "criticalPath" marks services on the money path (drives PDBs / spread / stricter SLOs)
@@ -96,7 +92,7 @@ services:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
       repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
-      tag: 22ce722
+      tag: a1d2b2e
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
     # baseline replica count (also the HPA floor / PDB reference)
@@ -120,7 +116,7 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: 22ce722
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -130,43 +126,61 @@ services:
     usesKafka: true
     # validates inbound user JWTs (resource server)
     secured: true
-    # Orders also CALLS Inventory/Payments off the request thread (Kafka saga), so it mints a service token
-    # via client credentials. clientId + the secret holding its client-secret (key: client-secret).
-    oidcClient:
-      clientId: orders-svc
-      secretName: orders-oidc
-    # The saga's synchronous decision calls (Orders -> Inventory/Payments) go to the in-cluster Service DNS names; locally the app falls back to localhost ports
-    extraEnv:
-      INVENTORY_BASE_URL: http://inventory:8080
-      PAYMENTS_BASE_URL: http://payments:8080
+    # NB (async saga): Orders makes NO sync calls to Inventory/Payments — it emits Kafka commands and reacts to
+    # replies. So it needs no sibling base-URLs and no service-token client: the former oidcClient (orders-svc /
+    # orders-oidc) and extraEnv (INVENTORY/PAYMENTS_BASE_URL) were removed with the sync→async cutover. It stays a
+    # resource server (secured) only to validate the inbound user JWT on POST /api/orders.
     # Public sync entry of the money path: scale out under load instead of queueing to collapse (works together with load shedding / 429, Pillar C)
     hpa:
       enabled: true
       minReplicas: 2
       maxReplicas: 4
       targetCPUUtilizationPercentage: 70
-    # Fase 5 — weighted canary on the money path. Default OFF (base render unchanged: standard Ingress route).
-    # enabled=true -> a second `orders-canary` Deployment+Service runs `tag`, and a Traefik IngressRoute +
-    # weighted TraefikService route `weight`% of /api/orders to it (rest to stable). Promote 5->50->100 by
-    # editing `weight` and committing while watching the checkout SLOs; rollback = weight 0 (or enabled:false).
-    # (Blue/green is the same mechanism at weights 100/0 between two colour tracks — follow-up.)
-    canary:
-      enabled: false
-      tag: 22ce722        # the canary build's image tag to trial (a new commit SHA)
-      weight: 5           # percent of /api/orders traffic sent to the canary
-      replicaCount: 1     # fixed small exposure — the canary is controlled traffic, not an autoscaled tier
-    # Fase 5 — blue/green (ALTERNATIVE to canary; mutually exclusive — the chart fails the render if both are on,
-    # since both own the /api/orders route). blue = the stable `orders`; green = a second `orders-green` running
-    # `greenTag` at full capacity. Release = flip `active` blue->green (atomic 100% cutover); rollback = flip back.
-    # While active=blue, green runs but gets 0 public traffic, so you can smoke-test it internally first.
-    bluegreen:
-      enabled: false
-      greenTag: 22ce722   # the candidate (green) image tag
-      active: blue        # blue | green  -> which colour serves /api/orders at 100%
+    # Fase 5 — progressive delivery (Argo Rollouts). With a strategy set, the orders workload renders as a
+    # Rollout CRD instead of a Deployment and the controller executes the release policy below on EVERY image
+    # bump (CI bumps the tag -> Argo CD syncs -> the Rollout sees a new pod template and starts the ramp).
+    # strategy: "canary" | "bluegreen" | "" (empty = plain Deployment, no progressive delivery).
+    #
+    # canary: ramps /api/orders traffic stable->canary through the weighted TraefikService `orders-weighted`
+    # (weights are PATCHED at runtime by the Rollouts controller — never declared in Git; the Argo CD app
+    # ignores the controller-managed fields). Each step holds `pause` while the background AnalysisRun
+    # (templates/analysis.yaml: canary-scoped SLO + consumer-failure queries) keeps gating: a failed analysis
+    # auto-aborts the rollout and resets the weight to 0 = instant rollback to stable, no human in the loop.
+    #
+    # NB (async saga): the weight governs ONLY the HTTP intake. Canary pods join the SAME Kafka consumer group
+    # as stable, so saga replies are consumed by canary code too — `canaryReplicas: 1` bounds that exposure to
+    # one pod during the ramp and the analysis watches the canary's consumer failure rate, but the hard release
+    # invariant is EVENT COMPATIBILITY between versions (see docs/design.md §4-D).
+    #
+    # bluegreen: the preview runs at full capacity next to the active colour; promotion flips the `orders`
+    # Service selector atomically (manual gate: `kubectl argo rollouts promote orders`); rollback = `undo`.
+    # The async caveat applies double here: the preview consumes saga replies at full share BEFORE promotion.
+    rollout:
+      strategy: canary
+      canary:
+        # Each step: (optional) pin the canary ReplicaSet size, set the TraefikService weight, hold `pause`
+        # while the analysis runs. `canaryReplicas` bounds the Kafka consumer-side exposure; `matchTrafficWeight`
+        # releases the pin so the canary scales with its traffic share. Full promotion follows the last step.
+        steps:
+          - canaryReplicas: 1
+            weight: 5
+            pause: 2m
+          - weight: 25
+            pause: 2m
+          - matchTrafficWeight: true
+            weight: 50
+            pause: 5m
+        # SLO-gated promotion (AnalysisTemplate <svc>-canary-slo). Needs Prometheus (kind turns this off:
+        # there the steps gate on the pauses alone and promote/abort stay manual judgement calls).
+        analysis:
+          enabled: true
+      bluegreen:
+        # never auto-cutover: a human promotes after smoke-testing the preview Service in-cluster
+        autoPromotionEnabled: false
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: 22ce722
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -180,7 +194,7 @@ services:
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: 22ce722
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -202,7 +216,7 @@ services:
   notifications:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/notifications
-      tag: 22ce722
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     # single replica: this service is allowed to be fully down (graceful degradation)
     replicaCount: 1
@@ -219,11 +233,10 @@ services:
     # lets the SSE hub hold every connection AND consume every event in one process — no cross-pod fan-out.
     hpa:
       enabled: false
-
   users:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/users
-      tag: latest
+      tag: a1d2b2e
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -240,9 +253,6 @@ services:
       minReplicas: 2
       maxReplicas: 4
       targetCPUUtilizationPercentage: 70
-
-
-
 # CloudNativePG Cluster CRs (operator is platform-level). One DB per data-owning service!
 #
 # Replication posture = our PACELC statement made real: CNPG replicates ASYNCHRONOUSLY by default, which means a failover can lose the last committed transactions (RPO > 0). For inventory that would break "never oversell" exactly under chaos experiment #5 (a committed reservation vanishes, the seat counter rolls back, the seat is sold twice). Hence:
@@ -295,11 +305,10 @@ databases:
     # a declarative Database on the SAME cluster. Password comes from the keycloak-db secret.
     managedRoles:
       - name: keycloak
-        secret: keycloak-db        # keys: username, password
+        secret: keycloak-db # keys: username, password
     extraDatabases:
       - name: keycloakdb
         owner: keycloak
-
   orders-db:
     # 2 instances: primary + one standby for fast failover
     instances: 2
@@ -314,7 +323,7 @@ databases:
     logicalReplication: true
     managedRoles:
       - name: debezium
-        secret: orders-db-debezium   # basic-auth (username=debezium, password); sealed under deploy/ (ns eurotransit)
+        secret: orders-db-debezium # basic-auth (username=debezium, password); sealed under deploy/ (ns eurotransit)
         replication: true
   inventory-db:
     # 3 instances: survive losing ONE replica without blocking writes (the invariant store)
@@ -341,13 +350,11 @@ databases:
       - name: debezium
         secret: payments-db-debezium
         replication: true
-
   users-db:
     # single instance: profile data is not on the money path and tolerates a short failover
     instances: 1
     database: usersdb
     owner: users
-
 # Default container resources for the services (no CPU limit: avoid throttling spikes; memory limit bounds the JVM blast radius)
 resources:
   # guaranteed share the scheduler reserves
@@ -373,7 +380,6 @@ databaseResources:
     memory: 256Mi
   limits:
     memory: 512Mi
-
 # Observability (Pillar D): what the kube-prometheus-stack should scrape and which SLO alerts to evaluate.
 # Rendered by templates/observability.yaml into one ServiceMonitor per service + the checkout-SLO
 # PrometheusRule. Turn the whole concern off with `enabled: false` — nothing is deleted, the CRs simply
@@ -390,3 +396,12 @@ observability:
   checkoutSuccessTarget: "0.99"
   # p99 objective in SECONDS for the synchronous POST /api/orders ack latency. String for the same reason.
   checkoutAckP99Seconds: "0.3"
+  # Fase 4 — saga-completion SLI target: fraction of ACCEPTED orders (202) that must reach a TERMINAL state
+  # (CONFIRMED or REJECTED) within the saga deadline. This is the signal the intake SLO cannot see: after
+  # the async cutover a 202 no longer means the order completed. Terminal — not confirmed — on purpose:
+  # SOLD_OUT / PAYMENT_DECLINED are correct outcomes the saga handled, they must not page anyone.
+  sagaTerminalTarget: "0.99"
+  # In-cluster Prometheus URL the Argo Rollouts AnalysisTemplates query (templates/analysis.yaml). The
+  # kube-prometheus-stack is installed in namespace `monitoring` (see justfile kube-prometheus-install);
+  # service name = <release>-prometheus.
+  prometheusUrl: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
