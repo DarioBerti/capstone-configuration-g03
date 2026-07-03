@@ -22,11 +22,16 @@ spec:
   roles:
     - controller
     - broker
-  # bound the per-node footprint (right-size, don't shrink HA)
+  # bound the per-node footprint (right-size, don't shrink HA). CPU/mem REQUESTS trimmed to real usage
+  # (brokers idle ~30m CPU / ~560Mi): on the fully-booked 3x B2s_v2 pool the old 250m/768Mi booking left
+  # 2 of 3 brokers Pending after Chaos Mesh + full observability moved in -> no KRaft quorum -> the one
+  # broker that scheduled crash-looped (exit 1). Scheduler-booking fix, NOT a capacity cut: the limit
+  # (1Gi) and the 512m heap are unchanged, so runtime headroom is identical. (03/07, same class as the
+  # CNPG 100m->50m and connect 250m->100m trims.)
   resources:
     requests:
-      cpu: 250m
-      memory: 768Mi
+      cpu: 100m
+      memory: 640Mi
     limits:
       memory: 1Gi
   # JVM heap (kept below the memory limit so off-heap + page cache have room)
