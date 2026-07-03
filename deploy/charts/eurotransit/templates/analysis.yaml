@@ -57,13 +57,22 @@ spec:
     - name: canary-intake-ack-p99
       interval: 30s
       failureLimit: 3
+      # A freshly-started JVM canary serves its first requests slowly (JIT + connection-pool + class-load
+      # warmup, ~30-90s); at low weight with sparse traffic those cold outliers ARE the p99 and would abort
+      # a healthy release on a FALSE signal. Skip the warmup window before judging LATENCY only — the
+      # correctness gates (success-rate, consumer-failures) still run from step 0, so a genuinely broken
+      # canary is still caught immediately; only the warmup-sensitive latency gate waits. Widen the rate
+      # window to 5m so a low-traffic canary accumulates enough samples for a stable p99. Warm p99 sits
+      # ~20-50ms (verified live on the sibling services) against the 0.3s objective — headroom is large; the
+      # only thing that ever pushed it over was cold start, which this delay excludes.
+      initialDelay: 3m
       successCondition: isNaN(result[0]) || result[0] <= {{ $obs.checkoutAckP99Seconds }}
       provider:
         prometheus:
           address: {{ $obs.prometheusUrl }}
           query: |
             histogram_quantile(0.99,
-              sum by (le) (rate(http_server_requests_seconds_bucket{service="{{ $name }}-canary", uri="/api/{{ $name }}", method="POST"}[2m])))
+              sum by (le) (rate(http_server_requests_seconds_bucket{service="{{ $name }}-canary", uri="/api/{{ $name }}", method="POST"}[5m])))
             or vector(0)
     # ── 3. canary Kafka listener failures ~ 0 (the consumer side no HTTP weight can canary) ──────────
     # A poisoned message legitimately produces a short failure burst (bounded retry -> DLT), so the gate
