@@ -116,7 +116,7 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: a1d2b2e
+      tag: c8e496f
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
