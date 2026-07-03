@@ -65,19 +65,9 @@ spec:
 ---
 # The async saga topics (must match platform/strimzi/kafka-topics.yaml, minus the replica count).
 # partitions=3 is fine on one broker (parallelism + per-key ordering); replicas=1 because there is only
-# one broker to hold a copy. Groups: trigger, commands (Orders->svc), replies (svc->Orders), terminal/
-# notify, and one dead-letter topic per consuming service.
-apiVersion: kafka.strimzi.io/v1
-kind: KafkaTopic
-metadata:
-  name: order-placed
-  namespace: kafka
-  labels:
-    strimzi.io/cluster: eurotransit
-spec:
-  partitions: 3
-  replicas: 1
----
+# one broker to hold a copy. Groups: commands (Orders->svc), replies (svc->Orders), terminal/notify, and
+# one dead-letter topic per consuming service. (There is no order-placed trigger: the saga is driven by
+# the synchronous add-leg/pay intake, not a listen-to-yourself event.)
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
@@ -214,6 +204,18 @@ apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: notification-requested
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+# Per-transition booking snapshot: Orders (outbox) -> Notifications relays it to the browser over SSE.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: order-status-changed
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit

@@ -44,7 +44,7 @@ kubectl -n eurotransit logs -f -l app.kubernetes.io/name=orders --prefix --max-l
 
 **Pane 3 — state + DB.** Saga state and stores (need a JWT — see below):
 ```bash
-curl -k https://app.localhost/api/orders/{orderId}                 # saga state: PENDING/RESERVED/AUTHORIZED/CONFIRMED/REJECTED
+curl -k https://app.localhost/api/orders/{orderId}                 # saga state: DRAFT/HELD/PAYING/AUTHORIZED/CONFIRMED/REJECTED
 curl -k https://app.localhost/api/inventory/items/{tripCode}       # remaining seats (never negative)
 curl -k https://app.localhost/api/payments/authorizations/{orderId} # 0 or 1 authorization per order
 ```
@@ -71,10 +71,11 @@ source so you can trust them; `{}` is a runtime value.)
 
 | What it means | Log phrase (grep target) | Source |
 |---|---|---|
-| Saga advancing | `RESERVED — authorize-payment emitted` · `AUTHORIZED — confirm-seats emitted` · `seats CONFIRMED — capture-payment emitted` | `orders/…/OrderStateMachine.kt` |
-| Terminal | `order {} CONFIRMED` · `order {} REJECTED ({})` | `OrderStateMachine.kt` |
+| Saga advancing | `added {} leg … — reserve-seats emitted` · `pay initiated — authorize-payment {} emitted` · `AUTHORIZED — confirm-seats fanned out` · `all legs confirmed — capture-payment emitted` | `orders/…/OrderServiceImpl.kt`, `OrderStateMachine.kt` |
+| Terminal | `order {} CONFIRMED` · `order {} REJECTED ({})` (reason ∈ SOLD_OUT / PAYMENT_DECLINED / RESERVATION_EXPIRED / EXPIRED_NO_PAYMENT / SERVICE_UNAVAILABLE) | `OrderStateMachine.kt` |
 | Malformed/late reply ignored | `order {} unexpected …-result status '{}' — ignored` | `OrderStateMachine.kt` |
-| **Stuck orders detected + re-driven** | `re-driving {} stuck order(s) older than the {} deadline` · `order {} re-driven from {} (timeout sweeper)` | `OrderTimeoutSweeper.kt` / `OrderStateMachine.kt` |
+| **Stuck orders detected + re-driven** (recover, post-pay) | `re-driving {} stuck order(s) older than the {} deadline` · `order {} re-driven from {} (timeout sweeper)` | `OrderTimeoutSweeper.kt` / `OrderStateMachine.kt` |
+| **Checkout window expired** (give up, pre-pay) | `expiring {} booking(s) past the checkout window` · then `order {} REJECTED (EXPIRED_NO_PAYMENT)` or `(SERVICE_UNAVAILABLE)` | `CheckoutExpirySweeper.kt` / `OrderStateMachine.kt` |
 | Sweep couldn't run | `order timeout sweep query failed, will retry: {}` · `re-drive of order {} failed, will retry next sweep` | `OrderTimeoutSweeper.kt` |
 | **Broker down / publish blocked** | `outbox drain failed, will retry: {}` · `publish of {} ({}) failed, stopping batch to preserve ordering` | `OutboxPublisher.kt` (all 3 services) |
 | Cooperative shutdown / restart | `cancelling outbox relay (cooperative shutdown)` · `cancelling order timeout sweeper (cooperative shutdown)`; on the new pod `outbox relay started` · `order timeout sweeper started` | `OutboxPublisher.kt` / `OrderTimeoutSweeper.kt` |
@@ -92,7 +93,7 @@ attributable to a single cause.
 The cleanest "dependency is completely gone" test.
 - **Inject:** `kubectl -n eurotransit scale deploy/payments --replicas=0`
 - **Observe:** intake still returns **202** (Pane 3). In Kafka UI the `authorize-payment` backlog grows and the
-  **`payments` consumer group drops to 0 members**. Orders stall at `RESERVED`. After the `PT2M` deadline, the
+  **`payments` consumer group drops to 0 members**. Paid orders stall at `PAYING`. After the `PT2M` deadline, the
   orders log streams `re-driving N stuck order(s) older than the PT2M deadline` every 5s.
 - **Expect:** nothing is lost. Recover with `kubectl -n eurotransit scale deploy/payments --replicas=2` → the
   backlog drains, stuck orders re-drive to `CONFIRMED`, and each order has **exactly one** authorization
@@ -186,7 +187,7 @@ they're instrumented (out of scope here — see the follow-up note).
 3. **Consumer lag is not exported to Prometheus** (the SLO doc calls it a leading indicator, but it isn't
    wired). → **Workaround:** Kafka UI consumer-group view — lag + member count.
 4. **Non-terminal order count has no gauge.** → **Workaround:** `SELECT status, count(*) FROM orders GROUP BY
-   status;` — a rising PENDING/RESERVED/AUTHORIZED pile is the early warning the sweeper only surfaces at the
+   status;` — a rising HELD/PAYING/AUTHORIZED pile is the early warning the sweeper only surfaces at the
    2-minute mark.
 
 > **Observability is off on kind by default.** No Prometheus/Grafana/Tempo, and logs are plaintext not ECS JSON

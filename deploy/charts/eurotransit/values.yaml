@@ -211,9 +211,12 @@ services:
     db: null
     criticalPath: false
     usesKafka: true
-    # Notifications has no inbound business REST API (Kafka-only) -> nothing to protect with a token
-    secured: false
-    # Allowed to fail entirely (graceful degradation): one replica, no HPA, no PDB
+    # One authenticated surface only: the per-user SSE stream (/api/notifications/orders/{id}/events) that
+    # relays saga updates to the browser -> validate the caller's Keycloak token (lazy decoder, so readiness
+    # never couples to Keycloak). Still a pure sink: it never calls the money path.
+    secured: true
+    # Allowed to fail entirely (graceful degradation): one replica, no HPA, no PDB. Single-replica is also what
+    # lets the SSE hub hold every connection AND consume every event in one process — no cross-pod fan-out.
     hpa:
       enabled: false
 

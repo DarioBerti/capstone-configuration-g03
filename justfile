@@ -322,9 +322,9 @@ dev-env:
     #!/usr/bin/env bash
     set -euo pipefail
     pw() { kubectl --context {{ctx}} -n eurotransit get secret "$1-db-app" -o jsonpath='{.data.password}' | base64 -d; }
-    # OIDC for the SECURED resource servers (catalog/orders/inventory/payments/users). The token's `iss`
-    # is the operator's fixed hostname (https://auth.localhost); JWKS is fetched from the :8180 Keycloak
-    # forward set up by dev-forward-all. notifications is unsecured, so it gets no KC env.
+    # OIDC for the SECURED resource servers (catalog/orders/inventory/payments/users + notifications' SSE
+    # stream). The token's `iss` is the operator's fixed hostname (https://auth.localhost); JWKS is fetched
+    # from the :8180 Keycloak forward set up by dev-forward-all.
     kc="KEYCLOAK_ISSUER=https://auth.localhost/realms/eurotransit;KEYCLOAK_JWK_SET_URI=http://localhost:8180/realms/eurotransit/protocol/openid-connect/certs"
     echo "SEMICOLON form -> paste into IntelliJ's *inline* Environment variables field (Active profiles: postgres)."
     echo "Using .env files instead? run \`just dev-env-files\` (writes one .env per service). Run dev-forward-all first."
@@ -345,7 +345,7 @@ dev-env:
     echo "SERVER_PORT=8085;DB_HOST=localhost;DB_PORT=5436;DB_NAME=usersdb;DB_USER=users;DB_PASS=$(pw users);$kc"
     echo
     echo "=== notifications (SERVER_PORT 8084, no DB) ==="
-    echo "SERVER_PORT=8084;KAFKA_BOOTSTRAP=localhost:9092"
+    echo "SERVER_PORT=8084;KAFKA_BOOTSTRAP=localhost:9092;$kc"
 
 # write one NEWLINE-format .env per service to services/<svc>/.env (gitignored). Point each IDE run config at it.
 dev-env-files:
@@ -358,8 +358,9 @@ dev-env-files:
       : > "$f"; for kv in "$@"; do echo "$kv" >> "$f"; done
       echo "  wrote $f"
     }
-    # OIDC for the SECURED resource servers (see dev-env). JWKS comes from the :8180 Keycloak forward;
-    # the token's real issuer (https://auth.localhost) is matched via KEYCLOAK_ISSUER. notifications omits it.
+    # OIDC for the SECURED resource servers (see dev-env), incl. notifications' authenticated SSE stream. JWKS
+    # comes from the :8180 Keycloak forward; the token's real issuer (https://auth.localhost) is matched via
+    # KEYCLOAK_ISSUER.
     KC_ISS="KEYCLOAK_ISSUER=https://auth.localhost/realms/eurotransit"
     KC_JWK="KEYCLOAK_JWK_SET_URI=http://localhost:8180/realms/eurotransit/protocol/openid-connect/certs"
     emit catalog       SERVER_PORT=8083 DB_HOST=localhost DB_PORT=5432 DB_NAME=catalogdb   DB_USER=catalog   "DB_PASS=$(pw catalog)"   "$KC_ISS" "$KC_JWK"
@@ -367,7 +368,7 @@ dev-env-files:
     emit inventory     SERVER_PORT=8081 DB_HOST=localhost DB_PORT=5434 DB_NAME=inventorydb DB_USER=inventory "DB_PASS=$(pw inventory)" KAFKA_BOOTSTRAP=localhost:9092 "$KC_ISS" "$KC_JWK"
     emit payments      SERVER_PORT=8082 DB_HOST=localhost DB_PORT=5435 DB_NAME=paymentsdb  DB_USER=payments  "DB_PASS=$(pw payments)"  KAFKA_BOOTSTRAP=localhost:9092 "$KC_ISS" "$KC_JWK"
     emit users         SERVER_PORT=8085 DB_HOST=localhost DB_PORT=5436 DB_NAME=usersdb     DB_USER=users     "DB_PASS=$(pw users)"     "$KC_ISS" "$KC_JWK"
-    emit notifications SERVER_PORT=8084 KAFKA_BOOTSTRAP=localhost:9092
+    emit notifications SERVER_PORT=8084 KAFKA_BOOTSTRAP=localhost:9092 "$KC_ISS" "$KC_JWK"
     echo ">> set Active profiles: postgres in each run config. These files are gitignored (.env)."
 
 # ── one-shot bootstrap ─────────────────────────────────────────────────────

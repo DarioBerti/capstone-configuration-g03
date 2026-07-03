@@ -25,7 +25,7 @@ the pass criterion is "these still hold after inject + heal."
 |---|---|---|
 | **I1 — No oversell** | seats for a trip are **never negative**; total sold ≤ capacity | `GET /api/inventory/items/{tripCode}` stays ≥ 0; `SELECT status,count(*) FROM reservations GROUP BY 1` reconciles |
 | **I2 — No double-charge** | **≤ 1** authorization per order; captured at most once | `GET /api/payments/authorizations/{orderId}` returns 0 or 1; `UNIQUE(order_id)` holds |
-| **I3 — Bounded termination** | every order reaches a **terminal** state (`CONFIRMED`/`REJECTED`) within the sweeper deadline after the fault heals | `SELECT status,count(*) FROM orders GROUP BY 1` — the non-terminal pile (PENDING/RESERVED/AUTHORIZED) drains to ~0 |
+| **I3 — Bounded termination** | every order reaches a **terminal** state (`CONFIRMED`/`REJECTED`) within the sweeper deadline (post-pay) or the checkout window (pre-pay) after the fault heals | `SELECT status,count(*) FROM orders GROUP BY 1` — the non-terminal pile (HELD/PAYING/AUTHORIZED) drains to ~0 |
 | **I4 — Intake availability** | `POST /api/orders` returns **202** whenever ≥1 orchestrator replica is up | curl intake during the fault |
 | **I5 — No committed work lost** | a committed order / reservation / payment survives any pod/broker/DB bounce (outbox is durable) | outbox backlog (`published_at IS NULL`) drains after heal; no gap in aggregate history |
 | **I6 — Graceful degradation** | a **non-money** dependency being fully down (Notifications, Catalog) never blocks the saga | orders still reach `CONFIRMED` while that service has 0 replicas |
@@ -41,8 +41,8 @@ worked drill in `kind-failure-drills.md`; rows with no § are detailed in [§3](
 
 | ID | Experiment | Inject | Invariants at risk | Expected mechanism | Pass criterion | Where | Runbook |
 |----|-----------|--------|--------------------|--------------------|----------------|-------|---------|
-| **P1** | Payments **offline** | `kubectl -n eurotransit scale deploy/payments --replicas=0` | I2, I3 | `authorize-payment` backlog buffers in Kafka; orders stall at `RESERVED`; after `PT2M` the **timeout sweeper** re-drives | on `--replicas=2`: backlog drains, orders → `CONFIRMED`, **exactly one** auth per order | kind | Drill 1 |
-| **P2** | Inventory **offline** | `kubectl -n eurotransit scale deploy/inventory --replicas=0` | I1, I3 | `reserve-seats`/`confirm-seats` buffer; orders stall at `PENDING`/`AUTHORIZED`; sweeper re-drives on heal | on heal: orders converge; seats never negative; one hold per order | kind | — |
+| **P1** | Payments **offline** | `kubectl -n eurotransit scale deploy/payments --replicas=0` | I2, I3 | a paid booking's `authorize-payment` buffers in Kafka; orders stall at `PAYING`; within the checkout window the **timeout sweeper** re-drives (recover); past the window the **expiry sweeper** rejects `SERVICE_UNAVAILABLE` (give up) | short outage → on `--replicas=2` backlog drains, orders → `CONFIRMED`, **exactly one** auth per order; outage > window → `REJECTED(SERVICE_UNAVAILABLE)`, hold voided (tombstone), **no charge** | kind | Drill 1 |
+| **P2** | Inventory **offline** | `kubectl -n eurotransit scale deploy/inventory --replicas=0` | I1, I3 | `reserve-seats`/`confirm-seats` buffer; pre-pay legs stay `PENDING` (order `HELD`), post-pay orders stall at `AUTHORIZED` (sweeper re-drives) | heal within the window → orders converge, seats never negative, one hold per order; heal past the window → `REJECTED(EXPIRED_NO_PAYMENT)` | kind | — |
 | **P3** | **Orchestrator** offline (Orders) | scale **both** `deploy/orders` **and** `deploy/orders-canary` to 0 | I3, I4, I5 | intake 503 at ingress (fail-fast, no data loss); replies buffer on reply topics; **sweeper is paused** (only Orders runs it) | on restore: unpublished outbox rows relay, buffered replies consume, sagas resume to terminal — nothing lost | kind | — |
 | **P4** | **Notifications** offline | `kubectl -n eurotransit scale deploy/notifications --replicas=0` | **I6** | Notifications is a terminal *observer*; its listener failures never propagate; it has no PDB (allowed fully down) | orders still reach `CONFIRMED`/`REJECTED` with Notifications at 0 replicas — saga unaffected | kind | — |
 | **P5** | **Catalog** offline | `kubectl -n eurotransit scale deploy/catalog --replicas=0` | I6 | Catalog is read-only, **not in the saga**; only browse 503s | in-flight + new orders still terminate; only `GET /api/catalog/*` degrades | kind | — |
@@ -77,7 +77,7 @@ worked drill in `kind-failure-drills.md`; rows with no § are detailed in [§3](
 | ID | Experiment | Inject | Invariants | Expected mechanism | Pass criterion | Where | Runbook |
 |----|-----------|--------|-----------|--------------------|----------------|-------|---------|
 | **D1** | `orders-db` pod loss | `kubectl -n eurotransit delete pod orders-db-1` | I3, I5 | 2 instances → CNPG promotes standby; brief write stall as transient errors; readiness flips. Async repl → **RPO>0** possible, covered by idempotent re-drive | no committed order lost; saga re-drive covers any interrupted step | kind (subset) / AKS (RTO) | Drill 6 |
-| **D2** | `inventory-db` **primary isolated from both standbys** | `NetworkChaos` isolating the primary | **I1** | synchronous repl + `dataDurability=required` → **writes BLOCK** (PC/EC: consistency over availability). `reserve-seats` can't commit → orders hold at `PENDING` | on heal: **RPO=0**, no reservation lost, **no oversell** even across failover | AKS | — |
+| **D2** | `inventory-db` **primary isolated from both standbys** | `NetworkChaos` isolating the primary | **I1** | synchronous repl + `dataDurability=required` → **writes BLOCK** (PC/EC: consistency over availability). `reserve-seats` can't commit → legs stay `PENDING` (order `HELD`) | on heal: **RPO=0**, no reservation lost, **no oversell** even across failover | AKS | — |
 | **D3** | `payments-db` pod loss | `kubectl -n eurotransit delete pod payments-db-1` | I2 | single instance (no HA) → write stall until CNPG restarts the pod; correctness = `UNIQUE(order_id)` idempotency table on the PVC, not replication | on restart: still ≤1 auth per order; no double-charge | kind | — |
 | **D4** | Node / AZ loss + failover **RTO/RPO** | drain/cordon a node (AKS) | I3, I5 | CNPG failover; measure against `docs/slo.md` (RTO ≤ 60s) | RTO ≤ 60s; inventory RPO=0, orders RPO bounded | AKS | `docs/chaos/05-pg-failover.md` |
 
@@ -145,7 +145,7 @@ The invariant-store consistency proof. `inventory-db` is **3 instances, synchron
 `dataDurability=required`** — chosen precisely so a failover can never lose a committed reservation (RPO=0),
 even though that means writes **block** under a full partition (PACELC PC/EC — consistency over availability).
 - **Inject (AKS):** `NetworkChaos` isolating the primary from both standbys (or drain its node).
-- **Observe:** `reserve-seats`/`confirm-seats` handlers block on commit → orders hold at `PENDING`/`AUTHORIZED`; intake still 202 (orders-db unaffected).
+- **Observe:** `reserve-seats`/`confirm-seats` handlers block on commit → legs stay `PENDING` (order `HELD`) / order stalls at `AUTHORIZED`; intake still 201/202 (orders-db unaffected).
 - **Expect:** **no oversell (I1)** and **no lost reservation (I5)** across the failover; on heal, blocked writes complete or roll back cleanly and the sweeper re-drives. RPO=0.
 - **kind caveat:** single-node/single-instance on kind — you can only kill the pod (D3-style) to see transient handling; the write-block / RPO=0 proof is **AKS-only**.
 
