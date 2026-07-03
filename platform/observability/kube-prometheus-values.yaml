@@ -33,8 +33,10 @@ grafana:
   sidecar:
     datasources:
       # stamp the DEFAULT Prometheus datasource with the exemplar destination: exemplar dots on panels
-      # link straight to the Tempo trace (trace_id is Micrometer's exemplar label name)
+      # link straight to the Tempo trace (trace_id is Micrometer's exemplar label name).
+      # NB: this chart key is a SINGLE MAP, not a list (the template reads .datasourceUid directly —
+      # a list fails the render with "can't evaluate field datasourceUid"; found on first AKS apply).
       exemplarTraceIdDestinations:
-        - datasourceUid: tempo
-          traceIdLabelName: trace_id
-          urlDisplayLabel: View trace in Tempo
+        datasourceUid: tempo
+        traceIdLabelName: trace_id
+        urlDisplayLabel: View trace in Tempo
