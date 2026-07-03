@@ -58,13 +58,13 @@ spec:
       interval: 30s
       failureLimit: 3
       # A freshly-started JVM canary serves its first requests slowly (JIT + connection-pool + class-load
-      # warmup, ~30-90s); at low weight with sparse traffic those cold outliers ARE the p99 and would abort
-      # a healthy release on a FALSE signal. Skip the warmup window before judging LATENCY only — the
-      # correctness gates (success-rate, consumer-failures) still run from step 0, so a genuinely broken
-      # canary is still caught immediately; only the warmup-sensitive latency gate waits. Widen the rate
-      # window to 5m so a low-traffic canary accumulates enough samples for a stable p99. Warm p99 sits
-      # ~20-50ms (verified live on the sibling services) against the 0.3s objective — headroom is large; the
-      # only thing that ever pushed it over was cold start, which this delay excludes.
+      # warmup, ~30-90s); at low weight those cold outliers ARE the p99 and would abort a healthy release on
+      # a FALSE signal (warm p99 on the sibling services is ~20-50ms vs the 0.3s objective — huge headroom).
+      # initialDelay skips the warmup window before judging LATENCY only: the correctness gates (success-rate,
+      # consumer-failures) still run from step 0, so a genuinely broken canary is aborted immediately. Keep
+      # the rate window TIGHT ([2m], not wider) — a wide window keeps the stale cold-start samples inside the
+      # p99 long after the pod warmed and re-fails a healthy canary; [2m] tracks CURRENT latency and, at the
+      # ramp's traffic, still holds plenty of samples.
       initialDelay: 3m
       successCondition: isNaN(result[0]) || result[0] <= {{ $obs.checkoutAckP99Seconds }}
       provider:
@@ -72,7 +72,7 @@ spec:
           address: {{ $obs.prometheusUrl }}
           query: |
             histogram_quantile(0.99,
-              sum by (le) (rate(http_server_requests_seconds_bucket{service="{{ $name }}-canary", uri="/api/{{ $name }}", method="POST"}[5m])))
+              sum by (le) (rate(http_server_requests_seconds_bucket{service="{{ $name }}-canary", uri="/api/{{ $name }}", method="POST"}[2m])))
             or vector(0)
     # ── 3. canary Kafka listener failures ~ 0 (the consumer side no HTTP weight can canary) ──────────
     # A poisoned message legitimately produces a short failure burst (bounded retry -> DLT), so the gate
