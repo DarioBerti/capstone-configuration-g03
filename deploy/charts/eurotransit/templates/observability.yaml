@@ -161,12 +161,15 @@ spec:
         # The denominator is shifted by 3m (> the 2m OrderTimeoutSweeper deadline) so every order counted
         # as "accepted" had time to finish; completions of the freshest orders can push the ratio slightly
         # above 1 — harmless for a `<` alert. NaN when idle (0/0) never fires an alert.
+        # Each addend is guarded with `or vector(0)`: a counter that has never incremented since the pods
+        # started (e.g. zero rejections) has NO series at all, and in PromQL `empty + x` is EMPTY — the
+        # whole rule silently produced nothing until the first rejection (found live on AKS 03/07).
         - record: checkout_saga:terminal_ratio:rate30m
           expr: |
             (
-              sum(increase(orders_confirmed_total[30m]))
+              (sum(increase(orders_confirmed_total[30m])) or vector(0))
                 +
-              sum(increase(orders_rejected_total[30m]))
+              (sum(increase(orders_rejected_total[30m])) or vector(0))
             )
               /
             sum(increase(orders_placed_total[30m] offset 3m))

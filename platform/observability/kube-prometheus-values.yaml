@@ -29,7 +29,7 @@ grafana:
       type: tempo
       uid: tempo
       access: proxy
-      url: http://tempo.observability.svc:3100
+      url: http://tempo.observability.svc:3200   # NB: the tempo chart's HTTP port is 3200 (not 3100!)
   sidecar:
     datasources:
       # stamp the DEFAULT Prometheus datasource with the exemplar destination: exemplar dots on panels
