@@ -92,7 +92,7 @@ services:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
       repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
-      tag: a1e995a
+      tag: 775b8af
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
     # baseline replica count (also the HPA floor / PDB reference)
@@ -116,7 +116,7 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: a1e995a
+      tag: 775b8af
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -185,7 +185,7 @@ services:
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: a1e995a
+      tag: 775b8af
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -199,7 +199,7 @@ services:
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: a1e995a
+      tag: 775b8af
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -230,7 +230,7 @@ services:
   users:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/users
-      tag: a1e995a
+      tag: 775b8af
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
