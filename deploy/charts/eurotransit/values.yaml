@@ -117,6 +117,7 @@ services:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
       tag: 775b8af
+      #tag: a1e995a
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -326,8 +327,16 @@ databases:
         secret: orders-db-debezium # basic-auth (username=debezium, password); sealed under deploy/ (ns eurotransit)
         replication: true
   inventory-db:
-    # 3 instances: survive losing ONE replica without blocking writes (the invariant store)
-    instances: 3
+    # 2 instances (primary + 1 sync standby). DECISION Part-2 (04/07, team + Malnati-track constraint = stay on
+    # the free Students sub, 6 vCPU / 12 data-disk slots MAXED): the full-HA stack (3 inventory + 3 Kafka + 2
+    # orders + 3 single-instance DBs + Prometheus) needs exactly 12 disks = the pool's hard ceiling, so cold-start
+    # was a race with no slack and a different component (3rd broker / 3rd inventory / an app) lost each time.
+    # Dropping inventory to 2 frees ONE disk slot -> 11/12 -> the race has headroom and the cluster converges
+    # cleanly & deterministically. Trade-off (defensible, was already documented as the alternative): with 2
+    # instances RPO is still 0 (dataDurability=required -> a commit waits for the 1 sync standby), but the price
+    # is availability — if that single standby is down, writes BLOCK (vs 3 instances which tolerate losing one
+    # standby and keep writing). We keep consistency over availability, which is the whole point of this DB.
+    instances: 2
     database: inventorydb
     owner: inventory
     # required = consistency over availability: block writes rather than risk RPO > 0

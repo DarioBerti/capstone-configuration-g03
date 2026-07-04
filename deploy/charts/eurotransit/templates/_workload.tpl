@@ -98,6 +98,20 @@ spec:
     spec:
       # SIGTERM drain window (Pillar A): readiness refuses traffic, in-flight work finishes within this budget
       terminationGracePeriodSeconds: 30
+      {{- if .svc.db }}
+      # Wait-for-dependency (Pillar C, cold-start): on a full cluster restart the app pods used to start BEFORE
+      # their CloudNativePG database accepted connections -> Flyway/Hikari fail-fast -> the container crashes and
+      # CrashLoopBackOffs until a lucky retry lands after the DB is up (scary "Degraded" during the demo, though
+      # it self-heals). This init container blocks the app until the DB's -rw (primary) TCP port is open, so the
+      # app's FIRST start already finds the DB. Tiny, no persistent footprint; standard dependency-ordering.
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z {{ .svc.db }}-rw 5432; do echo "waiting for {{ .svc.db }}-rw:5432"; sleep 2; done']
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 32Mi }
+      {{- end }}
       {{- if .svc.criticalPath }}
       # Spread critical-path pods across nodes so a single node loss can't take the service fully down
       topologySpreadConstraints:

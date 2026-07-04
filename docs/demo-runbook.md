@@ -54,6 +54,17 @@ kubectl -n argocd get application
 > ⚠️ Se le immagini in Git sono cambiate dall'ultima sessione, **orders parte DA SOLO con un ramp canary
 > di ~10 min** (è la Fase 5 che lavora, NON un guasto): `kubectl -n eurotransit get rollout orders -w`
 > e aspetta `Healthy`.
+>
+> ⚠️ **Turbolenza normale di cold-start (verificato 04/07, ~10-15 min prima che tutto sia verde):**
+> - **App in CrashLoopBackOff all'avvio** = partono prima che il loro DB CNPG accetti connessioni
+>   (`orders-db-rw:5432 refused` nei log). Si auto-riprendono ai retry; per accelerare:
+>   `kubectl -n eurotransit delete pod -l app.kubernetes.io/name=orders --field-selector=status.phase!=Running`.
+>   Aspetta prima che i DB abbiano il primary pronto: `kubectl -n eurotransit get cluster` (il `-rw` risponde).
+> - **`inventory-db` resta 2/3** ("Waiting for the instances to become active"): la 3ª istanza fatica a
+>   fare join sul pool stretto (è il tema della decisione Part-2). **A 2/3 inventory FUNZIONA** (primary + 1
+>   sync standby → RPO=0 con `ANY 1`); `eurotransit` resta quindi `Progressing` (non `Healthy`) ma opera.
+> - Se orders finisce con troppi pod (HPA che spike a 4 + il canary): converge da solo quando l'HPA
+>   scala giù da idle; se resta bloccato `Degraded`, `kubectl argo rollouts promote orders --full`.
 
 ```bash
 # salute finale: nessun pod rotto da nessuna parte
