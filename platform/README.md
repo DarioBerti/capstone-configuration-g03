@@ -10,7 +10,7 @@ then operate the EuroTransit application declared in `deploy/charts/eurotransit`
 | **CloudNativePG operator** | `cnpg-system` | Reconciles per-service PostgreSQL `Cluster` CRs | Lab03 |
 | **Strimzi operator** | `kafka` | Reconciles the Kafka cluster + topics for the async pipeline | Capstone |
 | **Debezium (Kafka Connect)** | `kafka` | Log-based CDC: drains each service's outbox off the WAL onto Kafka | Capstone |
-| **Sealed Secrets** | `kube-system` | Encrypts secrets at rest in Git | Lab04 |
+| **Sealed Secrets** | `sealed-secrets` | Decrypts committed `SealedSecret`s into in-cluster Secrets (one canonical Bitnami controller) | Lab04 |
 | **Argo CD** | `argocd` | GitOps reconciliation of desired state | Lab04 |
 | **Argo Rollouts** | `argo-rollouts` | Progressive delivery controller: SLO-gated canary + blue/green on orders | Capstone |
 | **kube-prometheus-stack** | `monitoring` | Prometheus + Grafana + Alertmanager (RED/USE, SLO alerts) | Lab05 |
@@ -26,6 +26,7 @@ Operators are installed once via Helm with an **explicit** chart version (never 
 | **Strimzi** | `strimzi/strimzi-kafka-operator` | `1.0.0` | verified 2026-06-28; latest stable (≥0.50.1 fixes CVE-2026-27133/27134) |
 | **CloudNativePG** | `cnpg/cloudnative-pg` | `1.29.1` | ≥1.25 required for `postgresql.synchronous` (inventory/orders RPO=0); pin with `--version 1.29.1` |
 | **Argo Rollouts** | `argo/argo-rollouts` | `2.41.0` (app v1.9.0) | ≥ app v1.7 required for the `--traefik-api-group=traefik.io` flags (Traefik v3) |
+| **Sealed Secrets** | `sealed-secrets/sealed-secrets` | `2.18.6` (app v0.37.0) | ONE canonical controller in ns `sealed-secrets` (consolidated from the former `kube-system` duplicate); matches the kubeseal client |
 
 Subdirectories hold the per-component bootstrap config:
 
