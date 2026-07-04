@@ -141,6 +141,11 @@ runbook `platform/argo-rollouts/README.md`.
 - ~~**D9**: TraefikService vs Argo Rollouts~~ → **CHIUSA 02/07: Argo Rollouts** (canary analysis automatica sulle SLO; v. Fase 5).
 - ~~**Debezium slot-failover**~~ → **CHIUSA 03/07: NO PG17** — restiamo su PG16; il sweeper self-heals il money
   path nel gap, la perdita notification (best-effort) è accettata. Il chaos #5 dimostra questa postura.
+- ~~**Part-2 capacità (12 dischi saturi)**~~ → **CHIUSA 04/07: Opzione A** — `inventory-db` 3→2 istanze (libera 1
+  dei 12 slot-disco → cold-start converge deterministico; RPO=0 mantenuto, si perde solo la tolleranza alla
+  perdita della standby). Restiamo sulla sub Students (no Pay-As-You-Go, come vuole il prof). + init-container
+  `wait-for-db` per eliminare il CrashLoop app-prima-del-DB. Verificato 04/07: eurotransit **Synced + Healthy**,
+  inventory 2/2, Kafka 3/3, tutto verde.
 
 ## Note operative AKS (04/07) — perché certi stati "gialli" sono attesi
 - **`eurotransit` OutOfSync — RISOLTO (era cosmetico).** Non erano i campi dei Rollouts (quelli sono già coperti
