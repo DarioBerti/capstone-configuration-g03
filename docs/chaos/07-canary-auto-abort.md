@@ -1,3 +1,6 @@
+<!-- #DA ELIMINARE -->
+> **⚠️ TO BE DELETED (#DA ELIMINARE)** — Chaos content consolidated into the configuration repo README §6 (the spec requires the reports, not 8 separate files); run commands live in demo-runbook §8. Kept for now; remove in one pass when the repo is final (grep `#DA ELIMINARE`).
+
 # Experiment 07 — Chaos on the canary → Argo Rollouts auto-abort (Fase 5 ✕ Fase 6)
 
 **Maps to:** Pillar D "proof under failure" ✕ Fase 5 progressive delivery. The Rollouts canary analysis

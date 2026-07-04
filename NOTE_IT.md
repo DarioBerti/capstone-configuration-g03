@@ -1,3 +1,6 @@
+<!-- #DA ELIMINARE -->
+> **⚠️ TO BE DELETED (#DA ELIMINARE)** — Obsolete repo guide (pre-async, sync architecture); superseded by the READMEs. Kept for now; remove in one pass when the repo is final (grep `#DA ELIMINARE`).
+
 # Struttura della configuration repo
 
 Se l'application repo risponde alla domanda *"come è fatto il codice?"*, la configuration repo risponde a *"cosa deve girare nel cluster, e con quali garanzie?"*. È la metà **dichiarativa** del modello a due repository: non contiene codice che si compila, ma lo **stato desiderato** del sistema. Argo CD legge questo repo e rende il cluster identico a ciò che c'è scritto qui.

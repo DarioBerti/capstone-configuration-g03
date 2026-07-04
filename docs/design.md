@@ -1,3 +1,6 @@
+<!-- #DA ELIMINARE -->
+> **⚠️ TO BE DELETED (#DA ELIMINARE)** — Consolidated into the configuration repo README.md. Kept for now; remove in one pass when the repo is final (grep `#DA ELIMINARE`).
+
 # EuroTransit — Design & scelte implementative (config repo)
 
 > Team-owned. Documento **unico** e canonico di design ad alto livello del sistema e del repo di
@@ -146,8 +149,14 @@ connector-down e verificata dal chaos #5.
 
 ## 5. Note aperte / prossimi prod-grade
 - **Leftover sync** (orders `oidcClient`/`extraEnv`, client `orders-svc`, secret `orders-oidc`) — **rimossi**.
-- **Bulkhead/breaker**: da reintrodurre solo attorno all'egress esterno (decisione legata a **PayPal** sì/no).
+- **Breaker attorno all'egress esterno**: **in corso su `async-rework`** — PayPal entra come **PSP reale** dietro
+  l'interfaccia (il mock resta selezionabile), quindi diventa la **home** del `@CircuitBreaker/@Retry/@TimeLimiter`
+  (Boot 4, `resilience4j-spring-boot4` + aspectj). Da mergiare su `main` a test superati; il doc di dettaglio si
+  aggiorna a merge fatto. Segue il consistency bump di `payments` a resilience4j `-spring-boot4` 2.4.0.
 - **KEDA** (autoscaling consumer su lag), **@RetryableTopic** (retry non-bloccante) — da valutare per il
   prod-grade. (~~slot-failover Debezium~~ → deciso NO il 03/07, v. §4-B.)
-- **Fase 6**: chaos da riscrivere per l'async (01 payments-latency, 04 kafka-partition centrale, + kill Connect /
-  failover CNPG-slot).
+- **In arrivo da `async-rework` (Riccardo)**: **SSE** per lo stato saga (notifications espone uno stream, il
+  frontend lo consuma), **order-legs + checkout-window** (ordini multi-tratta con finestra di checkout), e il
+  **frontend** SPA (Vite/React + Keycloak). Referenziati qui; i doc si aggiornano a lavoro finito e mergiato.
+- **Fase 6**: runbook chaos **già riscritti per l'async** (8 esperimenti, `docs/chaos/*`); resta l'**esecuzione
+  live su AKS** + postmortem + demo registrata.

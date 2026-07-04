@@ -204,7 +204,7 @@ kubectl -n eurotransit get traefikservice orders-weighted -o jsonpath='{.spec.we
 # l'analysis che fa da giudice (3 gate: success-rate, p99, failure consumer):
 kubectl -n eurotransit get analysisrun
 ```
-Racconto per il prof: *pesi mai scritti in Git (li muove il controller: `ignoreDifferences`),
+Da raccontare all'orale: *pesi mai scritti in Git (li muove il controller: `ignoreDifferences`),
 gate = le NOSTRE query SLO di Fase 4, abort automatico = chaos 07.* Dal 03/07 il **gate p99 misura
 latenza vera** (bucket abilitati in tutti i servizi) e il **warm-before-ready** dell'app evita i falsi
 abort da cold-start quando i pod canary si accendono.
@@ -238,7 +238,7 @@ kubectl -n eurotransit get rollout orders -w           # -> Healthy; la Service 
 ```
 > ⚠️ Racconta anche il caveat async (design §4-D): il preview a piena capacità **consuma già le reply Kafka**
 > prima del flip — il cutover atomico governa l'HTTP; la garanzia sul lato eventi è la compatibilità tra
-> versioni adiacenti. Detto al prof, è un punto di comprensione profonda, non una debolezza.
+> versioni adiacenti. Detto all'orale, è un punto di comprensione profonda, non una debolezza.
 
 ## 8. DEMO CHAOS (Fase 6) — i due da orale (veloci e leggibili)
 

@@ -1,3 +1,6 @@
+<!-- #DA ELIMINARE -->
+> **⚠️ TO BE DELETED (#DA ELIMINARE)** — Chaos content consolidated into the configuration repo README §6 (the spec requires the reports, not 8 separate files); run commands live in demo-runbook §8. Kept for now; remove in one pass when the repo is final (grep `#DA ELIMINARE`).
+
 # Test → chaos-experiment traceability
 
 Two levels of the **same** proof. The in-process **functional tests** (`capstone-application-g03/services/*/src/test`)

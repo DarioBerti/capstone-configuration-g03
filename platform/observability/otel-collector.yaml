@@ -11,7 +11,7 @@
 # Apply once:  kubectl apply -n observability -f platform/observability/otel-collector.yaml
 # (create the namespace first: kubectl create namespace observability)
 #
-# Fase 4 — sampling policy (the professor's "scale answer"): the apps keep sampling at 100%
+# Fase 4 — sampling policy (the "scale answer"): the apps keep sampling at 100%
 # (management.tracing.sampling.probability=1.0) and the GATEWAY decides what to keep — that is exactly why
 # this collector exists: one place for sampling, zero app changes to tune it. Tail-based (decides AFTER the
 # whole trace is seen), so the interesting traces are never lost: keep ALL error traces, keep ALL slow

@@ -1,3 +1,6 @@
+<!-- #DA ELIMINARE -->
+> **⚠️ TO BE DELETED (#DA ELIMINARE)** — Chaos content consolidated into the configuration repo README §6 (the spec requires the reports, not 8 separate files); run commands live in demo-runbook §8. Kept for now; remove in one pass when the repo is final (grep `#DA ELIMINARE`).
+
 # Experiment 01 — Latency injection into Payments (slow consumer)
 
 **Maps to:** capstone chaos #1 · Pillar C in async form: **temporal decoupling** (Kafka buffers the failure

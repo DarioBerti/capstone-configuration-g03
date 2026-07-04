@@ -1,555 +1,173 @@
 # Agent verification log
 
-> Capstone rule: agentic tools are permitted and encouraged, but the team must **verify** and
-> **show where the agent was wrong**. This log records concrete cases where an agent-produced
-> artifact was incorrect, unsafe, or subtly wrong, and how we caught and corrected it.
-> *Finding the agent's mistakes is the core skill the capstone certifies.*
-
-Format per entry: **what the agent produced → why it was wrong → how we caught it → the fix**.
-
----
-
-## 1. Helm template syntax leaked into a plain (non-templated) manifest
-
-- **Produced:** `platform/strimzi/kafka-topics.yaml` with a Helm comment
-  `{{- /* ... */}}` at the top. These topics are applied directly at platform bootstrap, not
-  rendered by Helm.
-- **Why wrong:** outside a Helm chart, `{{ ... }}` is not interpreted — it stays as literal
-  text and makes the YAML invalid, so `kubectl apply -f` would fail. The agent reused a Helm
-  idiom out of its valid context.
-- **How caught:** reviewer noticed the file lives under `platform/` (applied with kubectl),
-  not under `deploy/charts/` (rendered by Helm).
-- **Fix:** replaced the Helm comment with a plain `#` YAML comment.
-
-## 2. Resilience4j starter pinned without verifying Spring Boot 4 compatibility
-
-- **Produced:** `orders` and `payments` `build.gradle.kts` depend on
-  `io.github.resilience4j:resilience4j-spring-boot3:2.3.0` while the project targets
-  **Spring Boot 4.0.3**.
-- **Why potentially wrong:** the `-spring-boot3` starter is published for the Boot 3 line; its
-  auto-configuration may not bind on Boot 4 (package/auto-config relocation). Accepting the
-  version blindly risks a context-startup failure or silently inactive circuit breakers.
-- **How caught:** flagged at authoring time — annotated directly in the build file as
-  "verify on first build".
-- **Fix (pending Phase 2):** confirm at first `./gradlew build`; if incompatible, switch to a
-  Boot-4-compatible Resilience4j release or wire CircuitBreaker/Retry programmatically via the
-  core modules.
-- **Resolution (2026-06-10): RESOLVED with evidence.** A green `contextLoads` was judged
-  insufficient (the auto-configuration could back off silently, leaving `@CircuitBreaker`
-  annotations inert), so we added a build-breaking assertion in `OrdersApplicationTests`
-  that the `CircuitBreakerRegistry` bean actually exists. It passes on Spring Boot 4.0.3 +
-  Resilience4j 2.3.0. Functional open/half-open behaviour is now exercised in Phase 2 #1
-  (`PaymentsCircuitBreakerTest` drives CLOSED→OPEN→HALF_OPEN→CLOSED on the configured `payments`
-  instance; `PaymentsGatewayBreakerIntegrationTest` proves the real gateway opens and fast-fails
-  end-to-end against an unreachable Payments). To eliminate the residual AOP risk entirely we apply
-  the breaker **programmatically** via the registry rather than the `@CircuitBreaker` annotation
-  (see design.md decision 7).
-- **Update (2026-06-30): the AOP risk is closed at the source.** Resilience4j **2.4.0** shipped a
-  dedicated **`resilience4j-spring-boot4`** artifact (depends on Spring Boot 4.0.0 / Spring Framework
-  7.0.2 — verified on Maven Central), so the annotation aspects are officially supported on our Boot
-  4.0.3. We bumped **`orders`** to it and added `spring-boot-starter-aop`, then migrated the intake
-  rate limiter from the programmatic `OrdersIntakeRateLimiter` to the **`@RateLimiter` annotation** on
-  `OrdersController.place()`. `OrdersIntakeRateLimiterTest` drives the proxied controller directly and
-  proves the aspect actually fires on Boot 4 (2nd call → `RequestNotPermitted` → 429 + Retry-After) —
-  a build-breaking proof, not a silent no-op. The gateway breaker/bulkhead/retry stay programmatic by
-  **choice** now (explicit `Retry(CircuitBreaker(Bulkhead(…)))` composition, self-invocation safety,
-  deterministic testability), not because annotations can't weave. `payments` still pins
-  `resilience4j-spring-boot3:2.3.0` (programmatic-only, so it works); an optional consistency bump.
-
-## 3. (Reserved) readiness vs liveness probe scoping
-
-- **Watch item:** an agent commonly proposes a `livenessProbe` that transitively checks a
-  downstream dependency (DB/Kafka), which causes cascading restarts during a transient
-  downstream blip — the exact anti-pattern the capstone calls out.
-- **Our current stance:** liveness checks only `/actuator/health/liveness` (process self);
-  readiness includes the owned DB (`group.readiness: readinessState,db`) but **not** Kafka, so
-  broker blips don't flap the sync entry API. To be re-verified once handlers exist and during
-  the latency/partition chaos experiments.
-- **Status: OPEN** until validated under chaos.
-
-## 4. Thin `justfile` that ignored the team's established Lab01 convention
-
-- **Produced:** an initial `justfile` with only `test`/`build`/`run`/`image` shortcuts — no
-  local DoD verification, no `docker-run`/`docker-stop`/`health-check`, no `.dockerignore`.
-- **Why wrong:** Lab01 **explicitly required** (Step 2 + Step 4 + DoD item 4) the `justfile` to
-  be the "versioned interface for recurring tasks" with a single recipe that verifies the DoD
-  locally end-to-end (build → test → image → run → wait → health → cleanup), and Step 3
-  explicitly required a `.dockerignore`. The team's own Lab01 `justfile` already did all this
-  (`verify-local`, `act-ci`, JaCoCo, hooks). The agent produced something below the team's own
-  established standard.
-- **How caught:** teammate flagged that the Lab01 `justfile` was richer; we re-read the Lab01
-  brief and confirmed the convention was prescribed, not optional.
-- **Fix:** rewrote the `justfile` with `set shell`, `docker-run`/`docker-stop`/`health-check`,
-  and a `verify <svc>` / `verify-all` 7-step DoD flow with `trap` cleanup (adapted to 5 services,
-  no frontend); added `.dockerignore` to every service. Validated with `just --list`.
-
-## 5. "HA" databases that silently used asynchronous replication — RPO > 0 on the invariant store
-
-- **Produced:** `databases.yaml` Cluster CRs labelled "money path → HA" with `instances: 2`,
-  relying on CloudNativePG's **default asynchronous replication**.
-- **Why wrong (subtly):** with async replication a primary failover can lose the last
-  committed transactions (RPO > 0). For inventory this breaks the exact invariant the design
-  claims to protect: a committed reservation can vanish on failover, the seat counter rolls
-  back, and the seat is sold twice — "never oversell" would fail precisely under chaos
-  experiment #5 (CNPG primary failover). The atomic conditional UPDATE protects against
-  *concurrency*, not against *losing committed state*. "More instances" looked like more
-  safety while the consistency claim (CP / PC-EC) was not actually implemented.
-- **How caught:** design review of the configuration against our own PACELC statement
-  ("best configuration" pass, 2026-06-10): we asked "what does a failover do to a committed
-  reservation?" and the default answer was "it can disappear".
-- **Fix:** `inventory-db` → synchronous replication (3 instances, ANY 1,
-  `dataDurability: required`, RPO=0; writes block if the primary is isolated — consistency
-  over availability, as stated). `orders-db` → synchronous `preferred` (RPO=0 while healthy,
-  degrades to async rather than blocking intake). Documented in `design.md` #4.12; requires
-  CNPG ≥ 1.25.
-
-## 6. Lost state transitions: `@Modifying(clearAutomatically = true)` silently dropped unflushed entity changes
-
-- **Produced:** `InventoryService.release()` set `reservation.status = RELEASED` (relying on
-  Hibernate dirty checking) and then called the bulk-update `restock()`, whose
-  `@Modifying(clearAutomatically = true)` **cleared the persistence context before the status
-  change was ever flushed**. The transition was lost: the row stayed `RESERVED` in the DB, so
-  a second `release()` restocked the seats AGAIN — double restock, phantom availability,
-  oversell risk from the compensation path. Same latent bug in `confirm()` (expired branch)
-  and in the reconciler sweep (which would have re-expired the same holds every pass).
-- **Why subtle:** every individual piece looks correct; the bug is the *ordering interaction*
-  between dirty checking and bulk-update context clearing. The happy-path tests all passed —
-  only the idempotency test (`release restocks and is idempotent`, expected 10, got 14)
-  exposed it.
-- **How caught:** the test suite written alongside the code (2026-06-10), specifically the
-  idempotent-replay assertions. This is why idempotency tests are non-negotiable on the
-  money path.
-- **Fix:** `flushAutomatically = true` on the bulk updates, explicit `save()` of transitions
-  before any bulk update, and the sweep persists ALL transitions before the first restock
-  (the clear detaches the remaining entities mid-loop). All 12 inventory tests green,
-  including 8-thread last-seat and concurrent-duplicate races.
-
-## 7. Phase 2 #1 first cut: the circuit-breaker fallback masked permanent faults and the recovery sweep had unsafe edges
-
-- **Produced (2026-06-25):** the initial #1 implementation (circuit breaker + `PAYMENT_PENDING` + recovery
-  sweep) mapped EVERY exception from Payments to the `UNAVAILABLE` fallback, swept the whole batch of parked
-  orders inside one try/catch, and shipped no test for the `@Version` concurrency it relies on.
-- **Why wrong (caught by an adversarial multi-agent review of the diff):**
-  1. **A 4xx parked the order forever.** A deterministic client error (`HttpClientErrorException`) was ignored
-     by the breaker (correct) but still rethrown and swallowed into `UNAVAILABLE`, so the sweep retried it every
-     5s with the identical result — an infinite `PAYMENT_PENDING`. Fix: a dedicated `catch (HttpClientErrorException)`
-     maps a 4xx to a terminal `DECLINED` (`PaymentsGateway4xxTest`).
-  2. **The recovery sweep widened a money leak.** On a long outage the inventory hold (TTL 2m) expires while the
-     order is parked; the sweep would then re-authorize (CHARGE) and fail confirm (EXPIRED) with no refund until
-     #4. Fix: the sweep bounds the park by age and rejects an expired hold WITHOUT charging
-     (`OrderRecoverySweeperTest`); the residual sub-second window is made observable
-     (`orders_charge_without_refund_total`).
-  3. **One failing order aborted the whole sweep batch.** A single outer try/catch meant a lost `@Version` race
-     (an EXPECTED outcome on multi-pod sweeps) skipped every later order in that pass. Fix: per-order isolation.
-  4. **The load-bearing `@Version` had zero coverage** — sequential replay never fires it. Fix: an 8-thread
-     concurrent-confirm test asserts exactly one terminal event survives (`OrderVersionConcurrencyTest`).
-- **How caught:** four parallel reviewer agents over the diff (r4j-correctness, concurrency, saga-resume,
-  quality/tests); the high-confidence findings were verified true and fixed, each pinned by a new test.
-- **Fix:** all of the above; the orders suite went 15 → 20 tests, all green. Open follow-up: the Flyway V2 +
-  Hibernate `validate` path is still only exercised on H2; validating it on the real postgres profile
-  (Testcontainers) is deferred to the cluster phase.
-
-## 8. Phase 2 #3 test used a Spring test slice (`MockMvc`) absent from the Boot-4 classpath
-
-- **Produced (2026-06-26):** the first cut of `OrdersIntakeRateLimiterTest` exercised the 429 via
-  `@AutoConfigureMockMvc` + `MockMvc` (`org.springframework.test.web.servlet.*`).
-- **Why wrong:** the orders module's test dependencies are the **sliced** Boot-4 test starters
-  (`spring-boot-starter-webmvc-test`, `…-data-jpa-test`), which do **not** bring `MockMvc` /
-  `@AutoConfigureMockMvc` — the build failed at `compileTestKotlin` (`Unresolved reference 'web'`).
-  The agent reached for a familiar idiom without checking it was on the classpath, and it also
-  diverged from this project's established style (every other test drives the controller/saga bean
-  **directly**, e.g. `CatalogControllerTest`, `OrderSagaTest`).
-- **How caught:** `./gradlew test` (compile failure) — i.e. the build itself, before the change could
-  be pushed. A green-looking plan is not a green build.
-- **Fix:** rewrote the test in the project's direct-call style — autowire `OrdersController`, assert
-  202 → shed (counter `orders_intake_shed_total` +1) → `IntakeOverloadedException`, then invoke the
-  `@ExceptionHandler` directly to assert HTTP 429 + the `Retry-After` header. No extra test dependency;
-  consistent with the codebase. Orders suite now green including the new test.
-
-## 9. Phase 2 #4 first design: "reject-always + counter" only OBSERVED the money leak, it never CLOSED it
-
-- **Produced (2026-06-26):** the first #4 design (refund/void compensation) added an idempotent
-  `AUTHORIZED→VOIDED` transition on the existing Payments aggregate and, in the saga's expired-hold branch,
-  called `payments.void(id)` then **always** `reject(RESERVATION_EXPIRED)`, incrementing
-  `orders_charge_without_refund_total` when the void failed. The core (no reversal table, reuse of the
-  `payments` Resilience4j instance, no migration, no Kafka event) was sound.
-- **Why wrong (caught by an adversarial 3-lens review of the design BEFORE coding):**
-  1. **A failed void leaked permanently.** On a sustained Payments outage the shared breaker is already OPEN,
-     so the void fast-fails to `UNAVAILABLE`; `reject` is terminal and `OrderRecoverySweeper` only re-drives
-     `PAYMENT_PENDING` — so the charge was never retried and never reversed. "Money-observable" is not
-     "money-safe". Fix (team-chosen **Option B**): a failed void no longer rejects — it **parks**
-     (`markPaymentPending`) so the existing recovery sweep re-drives the saga and **retries the void** until it
-     succeeds, then rejects. Bounded by `app.recovery.max-park`. No new state, reuses the existing loop.
-  2. **The sweeper's max-park-expiry reject was an INVISIBLE leak.** A crash after a re-authorize-on-sweep but
-     before the void left a live charge; once past max-park the sweeper rejected WITHOUT voiding and WITHOUT
-     any metric. Fix: the expiry path now attempts an idempotent best-effort `payments.void(id)` first
-     (no charge → 404/no-op; a live charge → reversed).
-  3. **A crash between void and reject mis-parked the order ~2 min and spammed false "unexpected status".**
-     The replayed `authorize` returns the new `VOIDED` status, which fell into the saga's `else` (park) branch.
-     Fix: a `"VOIDED" -> reject(RESERVATION_EXPIRED)` branch in the stage-2 dispatch (a VOIDED replay = already
-     compensated → finish the rejection).
-  Minor fixes folded in: a dedicated `payments_voids_total{outcome}` meter (don't pollute the authorize RED
-  series), a 4-branch gateway fallback mirroring `authorize` (keep `bulkhead_full` distinct, map void 404 →
-  benign `NOT_FOUND`), and reuse of `AuthorizationResult` for the gateway `void` (no redundant `VoidResult`).
-- **How caught:** three parallel reviewer agents over the design (idempotency-correctness, codebase-consistency,
-  antipattern-theory) returned a unanimous "sound-with-fixes"; the two majors (leak windows) and the
-  crash-window were verified true against the source and incorporated before implementation.
-- **Fix:** all of the above, each pinned by a test — `OrderSagaTest` gained the compensation (#5.4),
-  failed-void-parks-then-rejects, and VOIDED-replay cases; `PaymentsServiceTest` gained void idempotency /
-  no-op-on-declined / not-found. Orders 27 → 30 green, Payments 7 → 11 green. The lost-update guard
-  (`@Version`/conditional UPDATE) on the void transition is deferred (money-safe today — no external
-  side-effect — and adding it would break the migration-free property); recorded as a follow-up in `design.md`.
-
-## 10. Coherence audit: the inventory restock had NO optimistic-lock guard → oversell under ≥2 replicas
-
-- **Produced (Fase 1, surfaced by a 5-lens read-only audit 2026-06-26):** the never-oversell invariant was
-  protected on the RESERVE side (atomic conditional `tryDecrement`) but the inverse RESTOCK side was left
-  unguarded. `InventoryItemRepository.restock` is an **unconditional additive** `available = available + qty`,
-  and `confirm`/`release`/`expireOverdue` did a **read-status-then-write** (`status==RESERVED` check) with **no
-  `@Version`** on `Reservation` and no row lock — while `OrderRecoverySweeper`'s symmetric multi-pod race had
-  been guarded with `@Version` on `Order` (decision 7/V2).
-- **Why wrong:** inventory runs `replicaCount: 2` (no leader election), so two reconcilers — or a late `confirm`
-  racing the reconciler (even in ONE pod: request thread vs reconciler coroutine) — both read the same
-  RESERVED+expired hold, both flip it EXPIRED (UPDATE by id, no guard), and **both restock** (+qty twice). The
-  additive restock is **non-convergent**, so the convergence argument that (correctly) lets `PaymentAuthorization`
-  skip `@Version` (an idempotent overwrite, #4/#9) does **not** transfer here. Result: phantom availability → the
-  next reserve oversells, breaking the headline invariant (`V1` only CHECKs `available >= 0`, no upper bound).
-- **How caught:** the audit's idempotency/money-path lens flagged it (single-sourced); we then **verified it on
-  the source** and **proved it with a failing test** — a new multi-transaction test in `InventoryConcurrencyTest`
-  (8 concurrent `expireOverdue` / `confirm`-vs-sweep on one hold) asserts a SINGLE restock; with `@Version` removed
-  it fails (double-restock), with `@Version` it passes.
-- **Fix:** `@Version` on `Reservation` + `V3__add_reservation_version.sql`. The existing
-  `@Modifying(flushAutomatically = true)` on `restock` makes the versioned reservation UPDATE flush **before** the
-  additive restock, so a stale-version loser throws `ObjectOptimisticLockingFailureException` and rolls back
-  **before** restocking. `confirm`/`release` map a lost race to a clean re-read of the now-terminal state (200,
-  not a spurious 5xx) via `InventoryController`; the reconciler's batch rolls back and self-heals next sweep.
-
-## 11. Coherence audit: #4 first cut left a dangling metric and an abandoned-charge boundary
-
-- **Produced (Fase 2 #4):** `design.md` decision 7 #1 claimed the residual money-leak window was "observable via
-  `orders_charge_without_refund_total`", but #4 had **removed that counter from the code** (replaced by
-  `orders_compensations_total` / `payments_voids_total`) — a canonical doc pointing at a non-existent metric. The
-  sweeper's max-park-expiry path also did a best-effort void then **rejected unconditionally**, so a still-down
-  Payments left a possibly-live charge abandoned, uncounted — inconsistent with the saga's own stage-3
-  park-on-failed-void. Separately, `orders_compensations_total{type=refund}` could **over-count** under concurrent
-  drivers because the saga ignored the void's `replayed` flag.
-- **Why wrong:** deck 10 — every policy must emit an accurate, alertable signal; a doc that references a dead
-  metric and a leak window that is only WARN-logged both violate that. The two saga drivers disagreeing on the
-  same outcome is an internal incoherence.
-- **How caught:** the audit's observability + antipattern lenses; verified against the source.
-- **Fix (team decision = Option B, money-safety over bounded retention):** the sweeper now rejects at max-park
-  only when the money state is **resolved** (`VOIDED`/`NOT_FOUND`/`DECLINED`) and **keeps the order parked + retries
-  the void** when Payments is unreachable (`orders_recovery_total{outcome=void_retry}`); `design.md` updated to the
-  real metrics and the retention tradeoff; the compensation counter is gated on `!replayed` in both drivers.
-
-## 12. Phase 2 #5 gap-analysis: a "proven" property was only proven by composition, and one test loop was un-gated
-
-- **Produced (interleaved with #1-#4):** the resilience test suite. A 3-lens gap-analysis of it against the #5
-  acceptance criteria found two subtle weaknesses behind otherwise-green tests:
-  1. **5.3 (retry is safe ONLY because idempotent) was asserted by COMPOSITION, never in one flow.**
-     `PaymentsRetryIntegrationTest` fires the real retry but its stub 503s at the transport layer *before* any side
-     effect (nothing is ever charged to dedup; it asserts the attempt *count*, not a charge), while
-     `PaymentsServiceTest` dedups with two *direct* calls and no retry. No test modelled the slide-22 danger: a charge
-     that **commits on the server then loses its response**, so the client retransmits onto an idempotent endpoint.
-  2. **The inventory `ReservationReconciler` had NO enabled-gate** (unlike orders' `OrderRecoverySweeper`): the 3
-     inventory `@SpringBootTest` were only *timing-safe* (the `PT15S` sweep outran sub-second tests), not gated. After
-     the #1 oversell fix added tests that seed already-expired holds, that became a latent race against the seat-count
-     assertions on a shared cached context.
-- **Why it matters:** "a property you prove" (deck 11 s.41) is not proven if the proof is inferred across two tests
-  in two services; and a test that passes only because a background loop happens to be slow is a flake waiting to fire.
-- **How caught:** the gap-analysis (coverage map + gating audit + chaos-doc design), each finding verified against the
-  source; the 5.3 gap was then made **falsifiable** (removing the stub's `putIfAbsent` dedup turns the new test red).
-- **Fix:** new `PaymentsRetryIdempotencyIntegrationTest` (real gateway + idempotent stub + response-lost-after-commit →
-  exactly one charge, build-breaking); `inventory.reservation.enabled` gate on `ReservationReconciler` mirroring
-  `OrderRecoverySweeper`, set `false` in the 3 inventory tests (race-free by gating, not timing); plus the #5.6
-  traceability doc (`docs/chaos/test-traceability.md`) + `@Tag("chaos-NN")` mapping each functional test to its
-  anticipated cluster experiment.
-
-## 13. Phase 3 — the two consolidation PRs (kind-cluster → config/main, backend-fixes → app/main) shipped four regressions
-
-- **Produced (2026-06-28):** PR#1 on each repo merged parallel branches without reconciling against the in-flight
-  Phase-3 work. The merges introduced four concrete defects, none caught by the (green-but-trivial) CI:
-  1. **`global.domain` regression.** The kind-cluster branch carried the old placeholder `g03.cpo2026.it`; the merge
-     resolved the chart's `deploy/charts/eurotransit/values.yaml` in its favour, **silently reverting** the working
-     `158.158.71.17.sslip.io` set in 385a39b. Argo CD renders base `values.yaml` only → Let's Encrypt HTTP-01 can't
-     validate the placeholder host → `eurotransit-tls` never issues (breaks §6.3 TLS).
-  2. **Duplicate `letsencrypt-prod` ClusterIssuer.** The kind branch added `clusterissuer-prod.yaml` (placeholder
-     email `team-g03@example.com`) while `clusterissuer.yaml` already defined `letsencrypt-prod` (real email). Two
-     definitions of the same cluster-scoped resource with **different ACME account emails** → applying both is
-     last-write-wins / non-deterministic.
-  3. **CI build broken for every real change.** `app/.github/workflows/ci.yml` `detect-changes` did
-     `echo "services=${{ steps.filter.outputs.changes }}"` — the JSON's own double-quotes terminate the bash string,
-     exporting **invalid JSON**, so `fromJSON` in the build matrix throws and the whole run dies in ~12s before any
-     image is built. It only surfaced now because the backend-fixes merge was the first push to change all five
-     `services/**` folders (earlier pushes touched only ci.yml/docs → matrix empty → build skipped → false green).
-  4. **Doc/pin drift:** `kind-registry/README.md` cited the non-existent `lab02g03registry.azurecr.io`; CNPG `1.29.1`
-     was pinned in `design.md` §4b but missing from `platform/README.md` (the file §4b names as source of truth),
-     violating the "never `latest`/pin in platform/README" rule.
-- **Why wrong:** a merge is not a no-op — resolving a `values.yaml` conflict toward the stale side silently undoes a
-  committed fix; and a CI that is "green" only because the build path never executes proves nothing (deck 08: a
-  pipeline must actually exercise the artifact). The Phase-2 resilience (`app/fase-2`) was also left **unmerged**, so
-  `app/main` after the PR was layer-folder layout **without** any circuit breaker/bulkhead/retry/429/void code.
-- **How caught:** a read-only re-audit of both repos after the PRs (branch-diff + CI run-history + `fromJSON` trace +
-  `git show origin/main:…values.yaml` history) — not by CI, which reported the 12s failure with no actionable log.
-- **Fix:** ci.yml passes the list via a `CHANGES` env var (valid JSON → matrix parses); `clusterissuer-prod.yaml`
-  email aligned to the real account (team to consolidate to ONE letsencrypt-prod file); `kind-registry/README.md` and
-  `platform/README.md` (CNPG `1.29.1` row + new `cert-manager/`/`traefik/`/`kind-registry/` dirs) corrected;
-  `design.md` §4b D-E rewritten to state the regression and that `global.domain` must be reset to the **current**
-  Traefik LB IP (the old `158.158.71.17` belonged to the prior cluster). Phase-2 resilience was re-applied onto the
-  layer-folder layout on `app` branch `fase-3-consolidation` (all 5 services compile; Testcontainers run pending).
-
-## 14. Phase 3 — CI pushed to a registry the chart never pulls from (a fifth consolidation regression)
-
-- **Found (2026-06-28):** a follow-up audit of the GitOps loop, after #13, surfaced a defect #13 missed:
-  `app/.github/workflows/ci.yml` built and pushed to `env.REGISTRY: etg03registry.azurecr.io`, while the chart
-  pulls every service from `labg03clusterregistry.azurecr.io` (`deploy/charts/eurotransit/values.yaml`
-  `global.registry` + the five `services.*.image.repository`). A **third** registry name on top of the
-  `lab02g03registry` ghost already corrected in #13.
-- **Why wrong:** the CI bumps **only** `services.<svc>.image.tag`, never the repository — by design (immutable
-  image, tag is the single CI-mutated field). So even on a green pipeline Argo CD would reconcile the chart to
-  `labg03clusterregistry/eurotransit/<svc>:<sha>`, an image that was pushed to `etg03registry` and therefore does
-  **not exist** there → `ImagePullBackOff` → the app never reaches Healthy. This is precisely the symptom logged in
-  `FASI_PROGETTO.md` ("Argo Synced&Healthy bloccato su immagini ACR"): the blocker was a config split-brain, not a
-  missing image build. A pipeline whose output address differs from what the deployer reads is dead on arrival
-  (deck 08: build and deploy must agree on the artifact coordinate, not just the tag).
-- **How caught:** read-only cross-repo diff of the image coordinate — `env.REGISTRY` in `ci.yml` vs `global.registry`
-  + `image.repository` in `values.yaml` — not by CI (no job asserts the two registries match).
-- **Fix:** `ci.yml` `REGISTRY` aligned to `labg03clusterregistry.azurecr.io` (the registry attached to the cluster
-  per D-G; `ACR_USERNAME/ACR_PASSWORD` secrets must belong to it). Also **completed #13's open item**: the duplicate
-  `platform/cert-manager/clusterissuer-prod.yaml` was deleted, leaving `clusterissuer.yaml` (staging+prod, real
-  email) as the single AKS source — which also fits the staging→prod issuance chosen for the first cert.
-  Open follow-up (not code): the `158.158.71.17.sslip.io` in `values.yaml` belonged to the **prior** cluster (#13);
-  it must be re-confirmed against the live Traefik LB IP after `az aks start` before issuing the cert.
-
-## 15. Phase 2 #7 — a new `@SpringBootTest` guard leaked shared-context state into a sibling test
-
-- **What the agent produced:** `MetricCardinalityGuardTest` (orders, §7.3 low-cardinality guard). To register a
-  real shed counter it shrank the intake budget via inlined `@SpringBootTest(properties=[… ratelimiter…
-  limit-for-period=1 …])` — copying the **exact** property set already used by `OrdersIntakeRateLimiterTest`.
-- **Why wrong:** Spring's test context cache keys on the merged config (inlined properties included). Identical
-  properties → both classes **share one cached context** → one singleton `RateLimiter("orders-intake")`. The guard
-  consumed the single per-window permit, so when the sibling ran in the same context its first `place()` (expected
-  `202 ACCEPTED`) was shed → `OrdersIntakeRateLimiterTest` failed. Green in isolation, red in the full suite — the
-  worst kind: a test that only fails when run with its neighbours.
-- **How caught:** running the **whole** orders suite, not just the two new tests (`./gradlew test` → `34 tests,
-  1 failed`). Running only the new tests had passed and would have shipped the leak.
-- **Fix:** made the guard's property set **distinct** (`limit-for-period=2`, consume 2 then shed) so it gets its
-  **own** cached context — no shared singleton, no leak. Lesson: an inlined-property `@SpringBootTest` that mutates
-  a singleton (rate limiter / breaker / registry) must not share a context with tests that assert on that
-  singleton's fresh state; vary the config or `@DirtiesContext`.
-- **Related (not a bug, a doc nuance):** the §7.5 note first claimed "`kubectl logs` shows JSON" as if already live.
-  The cluster runs the Fase-3 image (`3af035e`), predating the structured-logging config → live logs are still
-  plain; JSON ECS appears only after a CI rebuild. Doc corrected to say "post-deploy".
-
-## 16. Phase 2 #6 live validation — topology spread is `ScheduleAnyway` (soft), so it co-located both payments replicas
-
-- **What surfaced:** during the live §6 validation, `kubectl get pods -o wide` showed **both** `payments` replicas
-  on the same node (`…00000d`), despite a `topologySpreadConstraints{maxSkew:1, topologyKey: hostname}`.
-- **Why it matters:** the constraint uses `whenUnsatisfiable: ScheduleAnyway` → it is a **preference**, not a
-  guarantee. The scheduler packed both pods on one node; a single node failure would take out the entire payments
-  capacity — exactly the failure-domain co-location the spread is meant to prevent (deck 11: "replication protects
-  only if replicas are across independent failure domains").
-- **How caught:** reading live pod placement against node identity (not assuming the manifest's intent equals the
-  runtime result). The chart *had* the constraint; only the live cluster revealed it wasn't binding.
-- **Decision (team-owned, not auto-applied):** `DoNotSchedule` would make the spread a hard guarantee, but on a
-  3-node cluster it risks unschedulable pods during a drain/upgrade. Trade-off availability vs hard anti-affinity —
-  left as a documented finding for the team to resolve in `deploy/charts/eurotransit` + `docs/design.md`, not
-  silently changed by the agent.
-
-## 17. Phase 4 — agent almost overwrote a teammate's existing `chaos-mesh/README.md`
-
-- **What the agent did:** while adding the five Chaos Mesh manifests it went to **write** a fresh
-  `platform/chaos-mesh/README.md`, assuming the directory was new — but the folder already existed with a
-  teammate's "Planned experiments" stub (scaffolding committed earlier on `main`).
-- **Why wrong:** a blind `Write` would have **silently destroyed** the existing stub (and any intent in it),
-  the classic agent failure of treating a path as empty without checking. On a shared repo that is lost work.
-- **How caught:** the write-after-read guard refused (`File has not been read yet`). The agent then **read** the
-  stub, saw it listed the same five experiments as "planned", and **edited** it into the delivered version
-  (numeric-prefixed filenames matching `docs/chaos/0X`, safety model, run loop) instead of clobbering it.
-- **Lesson:** before writing a file in a multi-person repo, assume it may already exist — read first; turn an
-  overwrite into a merge/upgrade of what is there. (Also: the SLO targets were kept as **strings** in
-  `values.yaml`, e.g. `"0.99"`, so they render verbatim into the PromQL expressions — floats risked a
-  formatting surprise in the rule text.)
-
-## 18. Async cutover — three parallel agents building both sides of a Kafka contract with no shared schema
-
-- **What the agents produced (2026-06-30):** the sync→async money-path cutover (decision 13) was implemented
-  by **three agents in parallel** — Payments (two-phase + outbox + listeners), Inventory (outbox + listeners),
-  Orders (reply-driven saga). Each service keeps its **own copy** of the event payload `data class`es (the
-  project's deliberate no-shared-module choice), so the producer and the consumer of every topic were written
-  by **different agents who could not see each other's code**.
-- **Why that is the risk:** the contract is enforced by nothing but matching strings — topic names, JSON field
-  names, and the **status string literals** (`"RESERVED"`/`"SOLD_OUT"`/`"AUTHORIZED"`/…). A drift (one agent
-  emitting `seats-confirmed` while another listens on `confirm-seats-result`, or a reply carrying
-  `state` where the consumer reads `status`, or `"SOLDOUT"` vs `"SOLD_OUT"`) would compile cleanly, pass every
-  in-process test (listeners are `autoStartup`-gated **off** in tests, so no test crosses the wire), and only
-  fail **silently at runtime** — a reply that never matches, a status that falls into the `else`/ignored branch
-  and wedges the saga. Each agent's own green suite proves nothing about the *seam between* services.
-- **How we caught/prevented it:** (1) a **canonical contract was pinned up front** in each agent's brief
-  (exact topic + field + status-literal spelling) rather than left to each agent to invent; (2) after all three
-  returned green, the seam was **verified against the real source, not the agents' self-reports** — a sweep of
-  the topic constants in every `events/Topics.kt`, the status string literals across all `service`/`events`
-  code, and a leftover-reference grep (`PAYMENT_PENDING`, the retired `inventory-reserved`/`payment-authorized`
-  topics, the deleted `gateway/` package). The union of topic constants used in code (17) was then checked to
-  **exactly equal** the topic set in `platform/strimzi/kafka-topics.yaml` (no orphan topic, no missing CR).
-- **Outcome:** no drift — the three independently-written copies aligned on every topic, field, and status
-  value, and the old surface was fully removed. The lesson is the method, not a bug: when agents build opposite
-  ends of an un-typed contract in parallel, the contract must be **fixed before fan-out and re-verified at the
-  seam after** — a per-service green build is necessary but not sufficient. *(Follow-up worth considering: a
-  cheap CI contract test, or a shared `:events` module / schema registry, would make this seam compiler- or
-  test-enforced instead of review-enforced.)*
-
-## 19. Async cutover — concrete mistakes the build caught across the three implementing agents
-
-Companion to #18 (which covers the contract-*drift* prevention). These are the concrete defects/deviations
-the three cutover agents produced, and how each was caught and resolved — the "verify agent output" pass.
-
-- **Orders: a `@Bean` method name collided with its own `@Configuration` class bean name →
-  `BeanDefinitionOverrideException` (caught by the build).** The agent named the dead-letter error-handler
-  factory method `kafkaErrorHandler` inside a component-scanned `@Configuration class KafkaErrorHandler`,
-  whose default bean name is also `kafkaErrorHandler` → two bean definitions for one name, context refused to
-  start. **Caught:** the agent's own `./gradlew test` (context-load failure), not review. **Fix:** renamed the
-  method to `ordersDltErrorHandler`; still the single `CommonErrorHandler` Boot auto-wires. *Telling detail:*
-  the other two agents independently avoided the trap (Inventory `commandErrorHandler`, Payments `errorHandler`)
-  — same task, three names, one collision. A reminder that a `@Bean` method must not share a name with its
-  enclosing scanned component.
-- **Orders deviated beyond the spec's named deletions: also removed `management.health.circuitbreakers.enabled:false`.**
-  The plan named only the `resilience4j.*` blocks; the agent additionally dropped the now-meaningless health key.
-  **Caught:** orchestrator review of the diff against the brief. **Verdict:** accepted — the key is inert once the
-  breaker is gone, readiness never included it. Logged so the deviation is on the record, not silent.
-- **Inventory removed a method the spec didn't mention (`InventoryService.find`) and left the GET endpoints
-  controller→repository.** `find` existed only to back the deleted `terminalReadOnLockLoss` controller helper, so
-  it was dead after the command surface was removed; the two surviving GET inspection endpoints call
-  `TripSeatsRepository` directly (a pre-existing layering shortcut, not introduced here). **Caught:** review of the
-  agent's own flagged deviations + the compile. **Verdict:** dead-code removal accepted; the GET→repository
-  shortcut left as pre-existing debt (tracked in root CLAUDE.md "current state"), not widened.
-- **Payments renamed metrics as a side effect of the two-phase split** (`payments_voids_total` →
-  `payments_cancellations_total`; added `payments_captures_total`). **Caught:** review of the agent report; a doc
-  hazard like #11 (a renamed metric leaving a doc pointing at a dead series). **Fix:** verified no dashboard/doc
-  references the old names, and the design.md/DoD updates use the new names.
-- **Independent build verification of the final state.** Beyond each agent's own green suite (Payments 21,
-  Inventory 18, Orders 26), the orchestrator re-compiled **main + test for all three services from the
-  on-disk state** (`compileTestKotlin`, all exit 0) — a leftover import of a deleted class (`gateway/*`,
-  `PAYMENT_PENDING`, the breaker registries) would slip past a green per-agent run if a test file were stale,
-  but not past a clean cross-service compile. None found.
+> **Capstone rule (graded).** Agentic tools are permitted and encouraged, but the team must **verify** the
+> output and **show where the agent was wrong**. This file records concrete cases where an agent-produced
+> artifact (code, config, design, plan) was incorrect, unsafe, or subtly wrong, and how we caught and fixed it.
+> *"Finding the agent's mistakes is the core skill the capstone certifies."*
+>
+> These seven are the strongest, most instructive cases — real design/correctness/observability defects, not
+> style nits. Each is written to be understood on its own. Format: **What the agent produced → Why it was wrong
+> → How we caught it → The fix → The lesson.**
 
 ---
 
-_Add new entries as they happen. Aim well past the required three; every caught mistake is
-evidence of ownership._
+## 1. "HA" databases that silently used asynchronous replication — RPO > 0 on the store that holds the invariant
 
-## 20. Fase 5 — the agent's manual canary was itself hand-rolled infrastructure, and it missed the consumer-group semantics
+- **What the agent produced.** The CloudNativePG `Cluster` definitions for the money-path databases, labelled
+  "money path → HA", with `instances: 2` and nothing else — so they ran on CloudNativePG's **default
+  asynchronous replication**.
+- **Why it was wrong.** "More instances" looks like more safety, but with async replication a primary failover
+  can lose the last transactions that were committed on the primary but not yet shipped to the replica
+  (**RPO > 0**). For `inventory` that silently breaks the one invariant the whole design is built to protect: a
+  committed seat reservation can vanish on failover, the seat counter rolls back, and the seat gets sold twice.
+  The atomic conditional `UPDATE` protects against **concurrency**, but not against **losing already-committed
+  state** — a completely different failure. So the config looked HA while the consistency claim (CP / PC-EC) was
+  not actually implemented, and it would have failed precisely under chaos experiment #5 (primary failover).
+- **How we caught it.** A design review that checked the configuration against our own PACELC statement. We asked
+  one concrete question — *"what does a failover do to a committed reservation here?"* — and the honest answer was
+  *"it can disappear"*.
+- **The fix.** `inventory-db` → **synchronous** replication (3 instances, `ANY 1`, `dataDurability: required`,
+  RPO=0): a write is not acknowledged until a standby has it, so a failover loses nothing; if the primary is
+  isolated, writes **block** rather than risk loss — consistency over availability, exactly as stated.
+  `orders-db` → synchronous `preferred` (RPO=0 while healthy, degrades to async instead of blocking intake, since
+  the invariant does not live in orders-db). Requires CNPG ≥ 1.25.
+- **The lesson.** A replica count is not a durability guarantee. When a store holds a correctness invariant, the
+  replication **mode** (sync vs async) is the design decision — and the default is async.
 
-Two related misses in the agent-designed first version of Fase 5 (weighted TraefikService with the weight
-edited in `values.yaml`), both caught on 02/07 during the prod-grade re-evaluation:
+## 2. A bulk-update flag silently threw away un-flushed state changes → double restock → oversell
 
-- **The mechanism violated our own "no hand-rolled infra" rule — and the agent presented it as a virtue.**
-  The manual design was pitched as "GitOps-native canary" (peso = commit, auditabile). Re-examined, the
-  *promotion controller* of that design was a human watching Grafana and committing weight bumps — i.e. the
-  control loop of progressive delivery re-implemented by hand, the same bias class as the polling outbox
-  relay that Debezium replaced (#18-adjacent). No automated analysis meant no reaction to a canary burning
-  error budget at 3am. **Fix:** Argo Rollouts (pinned chart 2.41.0/app v1.9.0): policy in Git (steps, pauses,
-  AnalysisTemplate queries), execution by the controller; every CI tag bump is now an SLO-gated release with
-  automatic abort. **Caught:** team prod-grade audit, not by the agent unprompted.
-- **The agent validated canary + blue/green live without noticing they only govern the HTTP intake.** In the
-  async saga, canary/green pods join the SAME Kafka consumer group as stable: at weight 0 the canary still
-  advances real orders (its listeners consume saga replies), and a full-capacity green consumes ~half the
-  partitions BEFORE the "atomic" switch — so the old docs' "esposizione controllata" / "cutover atomico"
-  claims were silently intake-only, and a state-machine bug in green would touch real orders at 0% traffic.
-  The 30/06 live validation (12/24 split, colour flip) measured exactly what the design promised and so
-  couldn't surface what it didn't promise. **Fix:** documented as a release rule (event compatibility between
-  adjacent versions, design.md §4-D), canary consumer exposure bounded via `setCanaryScale: 1`, and the
-  Rollouts analysis gates on the canary pods' Kafka listener failure rate — the consumer-side signal no HTTP
-  weight can canary. **Lesson:** validating that a mechanism does what its design says is necessary but not
-  sufficient — the graded question is what the design *fails to say*.
+- **What the agent produced.** `InventoryService.release()` set `reservation.status = RELEASED` (relying on
+  Hibernate dirty-checking to persist it later) and then called the bulk-update `restock()`. That repository
+  method carried `@Modifying(clearAutomatically = true)`.
+- **Why it was wrong.** `clearAutomatically = true` **clears the persistence context before the pending status
+  change was ever flushed to the database**. So the transition was lost: the row stayed `RESERVED`, and a second
+  `release()` restocked the seats **again** — a double restock that invents phantom availability, which then lets
+  the next reservation oversell. The bug is not in any single line; it is the **ordering interaction** between
+  dirty-checking (defers the write) and `clearAutomatically` (discards the deferred write). The same latent bug
+  existed in `confirm()` (expired branch) and in the reconciler sweep.
+- **How we caught it.** The happy-path tests all passed — only the **idempotency test** (`release restocks and is
+  idempotent`) caught it: it expected 10 seats back and got 14. This is exactly why idempotency/replay tests are
+  non-negotiable on the money path.
+- **The fix.** `flushAutomatically = true` on the bulk updates (flush the transition **before** the context is
+  cleared), plus an explicit `save()` of each transition before any bulk update. All inventory tests green,
+  including the 8-thread last-seat and concurrent-duplicate races.
+- **The lesson.** Each piece can be individually correct while their **interaction** is a data-loss bug; only a
+  test that asserts the after-state of a *repeated* operation surfaces it.
 
-## 21. Fase 4 — four contract mismatches caught while implementing the observability additions (02/07)
+## 3. The restock side had no optimistic-lock guard → oversell once inventory runs ≥ 2 replicas
 
-The Phase-4 handoff doc (agent-assisted) and the two sibling PRs carried four subtle cross-artifact
-mismatches; all were caught by checking each query/option against the thing that actually emits it:
+- **What the agent produced.** Never-oversell was protected on the **reserve** side (the atomic conditional
+  `tryDecrement`), but the inverse **restock** side was left unguarded: `restock` is an unconditional additive
+  `available = available + qty`, and `confirm`/`release`/`expireOverdue` did a **read-status-then-write** (`if
+  status == RESERVED …`) with **no `@Version`** and no row lock on `Reservation`.
+- **Why it was wrong.** Inventory runs **2 replicas** with no leader election, so two reconcilers — or a late
+  `confirm` racing the reconciler (even inside one pod: request thread vs reconciler coroutine) — can both read
+  the same expired-but-`RESERVED` hold, both flip it to `EXPIRED`, and **both restock (+qty twice)**. Because the
+  restock is *additive* (non-convergent), the argument that lets `PaymentAuthorization` safely skip `@Version`
+  (an idempotent overwrite) does **not** transfer here. Result: phantom seats → the next reserve oversells — the
+  headline invariant broken from the compensation side.
+- **How we caught it.** A read-only coherence audit flagged it (the reserve side was guarded, the restock side
+  wasn't); we then **proved it with a failing test** — 8 concurrent `expireOverdue`/`confirm`-vs-sweep on one
+  hold asserting a *single* restock. With `@Version` removed it fails (double restock); with `@Version` it passes.
+- **The fix.** `@Version` on `Reservation` (+ migration). The existing `flushAutomatically` on `restock` makes the
+  versioned reservation UPDATE flush **before** the additive restock, so a stale-version loser throws
+  `ObjectOptimisticLockingFailureException` and rolls back **before** restocking; a lost race re-reads the now-terminal
+  state cleanly (200, not a spurious 5xx).
+- **The lesson.** An invariant has two sides. Guarding the obvious one (decrement) is not enough when the inverse
+  (restock) is additive and runs on multiple replicas.
 
-- **PR 17's lag queries use a label the exporter never emits.** The runbooks (exp 01/04/08) query
-  `kafka_consumergroup_lag{group="..."}`, but the Strimzi kafka-exporter's native label is
-  **`consumergroup`** (our own Kafka dashboard uses it correctly). The handoff doc even picked the exporter
-  *"so the runbook queries work"* — they still wouldn't have. **Fix:** metricRelabeling on the exporter
-  PodMonitor copies `consumergroup`→`group` (both selectors resolve, zero extra series) + this note; the
-  runbooks should still be normalized to `consumergroup` in PR 17 review (owner notified).
-- **The handoff doc prescribed a Debezium option that does not exist.** It said to map the trace context via
-  `table.field.event.headers`; the Outbox Event Router has no such option — the real one is
-  **`table.fields.additional.placement: "traceparent:header"`**. Applied verbatim, the connector config
-  would have been silently ignored or rejected. **Caught:** checked against the Debezium EventRouter
-  reference before editing the connectors.
-- **The doc's relabel policy would have corrupted multi-replica series.** It said to drop
-  `pod, instance, endpoint, container` on the app ServiceMonitors. `pod`/`instance` are the only labels
-  distinguishing two replicas of the same service: dropping both collapses their series into one identity →
-  duplicate-sample ingestion errors (orders runs multi-replica + canary). **Fix:** identity labels stay on
-  app monitors; `pod` is dropped ONLY on the kafka-exporter monitor (cluster-level metrics, restart churn);
-  cardinality is enforced by templated `uri`, recording rules and panel grouping (design.md §4-D).
-- **Enabling listener observation (needed for cross-Kafka traces) can silently neuter PR 16's canary gate.**
-  With `spring.kafka.listener.observation-enabled: true`, the `spring.kafka.listener` timer is produced by
-  the Observation API, whose tag set differs from the legacy MicrometerHolder timer (`error="..."` instead of
-  `result="success|failure"`). PR 16's `canary-consumer-failures` gate filters `result="failure"` with an
-  `or vector(0)` fallback — if the tag vanishes the gate would *always pass* and never abort a bad canary.
-  **Status:** verification step, not yet a confirmed defect — after deploying the app branch, scrape
-  `/actuator/prometheus` and check the tag set; if `result` is gone, the gate selector must move to the
-  observation tags (PR 16 owner notified).
+## 4. The circuit-breaker fallback masked permanent faults, and the recovery sweep had money-leak edges
 
-## 22. Fase 4/5 integration — the listener metric's tag scheme changed under the canary gate (predicted by #21, confirmed live)
+- **What the agent produced.** The first cut of the Orders→Payments resilience (circuit breaker + a
+  `PAYMENT_PENDING` parking state + a recovery sweep) mapped **every** exception from Payments to an
+  `UNAVAILABLE` fallback, swept the whole batch of parked orders inside a single try/catch, and shipped no test
+  for the `@Version` concurrency it relied on. *(This is now historical: the sync Orders→Payments call — and this
+  breaker — were retired when the money path became an async Kafka saga. The mistakes it made are still the point.)*
+- **Why it was wrong** (found by an adversarial review of the diff):
+  1. **A client error parked the order forever.** A deterministic 4xx from Payments was mapped to `UNAVAILABLE`,
+     so the sweep retried it every few seconds with the identical result — an infinite `PAYMENT_PENDING`. A 4xx is
+     terminal information, not a transient outage.
+  2. **The recovery sweep widened a money leak.** On a long outage the inventory hold expires while the order is
+     parked; the sweep would then **re-authorize (charge) and fail confirm** (hold expired) with no refund.
+  3. **One failing order aborted the whole sweep.** A single outer try/catch meant one lost `@Version` race (an
+     *expected* outcome across pods) skipped every later order in that pass.
+  4. **The load-bearing `@Version` had zero coverage** — sequential tests never exercise a concurrent race.
+- **How we caught it.** Parallel reviewer agents over the diff (resilience-correctness, concurrency, saga-resume,
+  tests); each high-confidence finding was verified against the source and then **pinned by a new test**.
+- **The fix.** A dedicated 4xx→terminal `DECLINED` path; the sweep bounds parked orders by age and rejects an
+  expired hold **without** charging; per-order isolation in the sweep; and an 8-thread concurrent-confirm test
+  asserting exactly one terminal event survives. Orders suite 15 → 20 tests, all green.
+- **The lesson.** A fallback that turns *every* failure into "temporarily unavailable" hides the failures you must
+  treat differently (permanent vs transient), and a batch recovery loop needs per-item isolation and an explicit
+  money-safety bound.
 
-Emanuele's #21 flagged the risk; the first AKS deploy of the merged stack confirmed it: enabling listener
-OBSERVATIONS for the cross-Kafka tracing (app PR #10) replaces plain-Micrometer's
-`spring_kafka_listener_seconds{result="success|failure"}` with the Observation convention
-`spring_kafka_listener_seconds{error="none|<ExceptionClass>"}` (plus a separate `_active_` long-task timer).
-The Fase-5 canary analysis gate #3 and chaos runbook 08 still queried `result="failure"` — an always-empty
-query whose `or vector(0)` guard made the gate silently INERT (never aborts, never false-aborts: fail-safe
-but void). **Fix:** queries moved to `error!="none"` (config main, post-merge integration commit).
-**Lesson:** a metric is an API between repos — when an app-side dependency changes an instrumentation mode,
-grep the CONFIG repo for consumers of the affected metric before merging (the two PRs were reviewed
-separately and each was correct in isolation).
+## 5. Two "consolidation" merge PRs shipped four regressions that green CI never caught
 
-## 23. Fase 4 live — spans created but never exported: Boot 4 renamed the OTLP endpoint property
+- **What the agent produced.** One PR per repo that merged parallel branches without reconciling them against the
+  in-flight Phase-3 work. The merges introduced four concrete defects, none caught by the (green-but-trivial) CI:
+  1. **Domain regression.** A `values.yaml` conflict was resolved toward the stale side, **silently reverting** the
+     working ingress host back to a placeholder → Let's Encrypt can't validate → TLS never issues.
+  2. **Duplicate `ClusterIssuer`.** Two definitions of the same cluster-scoped `letsencrypt-prod` with **different
+     ACME emails** → applying both is last-write-wins / non-deterministic.
+  3. **CI broken for every real change.** `detect-changes` exported invalid JSON (the JSON's own quotes terminated
+     the shell string), so the build matrix threw and the run died in ~12s — but only when a push actually touched
+     `services/**`, which is why earlier docs-only pushes looked green.
+  4. **Doc/pin drift.** A README cited a non-existent registry; a CNPG version was pinned in one file and missing
+     from the file named as the source of truth.
+- **Why it was wrong.** A merge is not a no-op: resolving a conflict toward the stale side **undoes a committed
+  fix**, and a pipeline that is "green" only because its build path never executes proves nothing.
+- **How we caught it.** A read-only re-audit of both repos **after** the PRs — branch diffs, CI run history, and a
+  trace of the `fromJSON` failure — not by CI, which reported a 12-second failure with no actionable log.
+- **The fix.** Pass the changed-services list via an env var (valid JSON → matrix parses); consolidate to one
+  `letsencrypt-prod` issuer with the real email; correct the registry/version references; reset the ingress host to
+  the live value.
+- **The lesson.** Trust `git`, not the merge narrative: after a non-trivial merge, diff the result against what was
+  known-good, and make sure CI actually **exercises** the artifact instead of skipping the build.
 
-First AKS run of the merged tracing stack: traceId/spanId present in every ECS log line (tracer active,
-sampling 1.0) yet the collector counted zero received spans and no service logged an export error. Root
-cause: Boot 4 moved the OTLP tracing endpoint from `management.otlp.tracing.endpoint` (the property both the
-app yml and the chart env used) to `management.opentelemetry.tracing.export.otlp.endpoint` — with nothing
-bound there, `OtlpTracingAutoConfiguration` creates NO exporter at all, which is why the failure was silent
-(no exporter = no export attempts = no errors; the classic misconfiguration would at least have produced
-connection-refused noise). **Fix:** the chart now injects the Boot-4 property name (old name kept alongside
-until the app yml drops its stale key — app-repo follow-up). **Lesson:** completes the #21→#22 chain — the
-same Boot-4 modularization that made the deps inert also renamed the properties; when a majour-version
-framework migration touches observability, validate the SINK receives data, not only that the app "has"
-tracing (in-process evidence like log traceIds proves the tracer, not the pipeline).
+## 6. The agent's "GitOps-native canary" was hand-rolled delivery infra — and it only governed HTTP
 
-## 24. Fase 5 live — the first real AKS canary auto-aborted on a NaN false positive (the mechanism worked, the signal lied)
+- **What the agent produced.** A progressive-delivery design where the canary weight was a number edited in
+  `values.yaml` and moved by hand, presented as a virtue ("the weight is a commit, fully auditable").
+- **Why it was wrong** (two separate misses):
+  1. **It re-implemented the delivery control loop by hand.** The "promotion controller" of that design was a human
+     watching Grafana and committing weight bumps. That is exactly the kind of infrastructure we are supposed to use
+     a real tool for — the same bias as hand-rolling a polling outbox relay instead of using CDC. With no automated
+     analysis, nothing reacts to a canary burning error budget at 3am.
+  2. **In the async saga, a traffic weight does not bound the blast radius.** Canary/green pods join the **same
+     Kafka consumer group** as stable, so at weight 0 the canary still consumes saga replies and advances **real**
+     orders, and a full-capacity green consumes ~half the partitions **before** the "atomic" switch. The live
+     30/06 validation measured exactly what the design promised and therefore could not reveal what it failed to say.
+- **How we caught it.** A team prod-grade re-evaluation (not the agent, unprompted): we asked whether the mechanism
+  was a real controller and what a canary actually isolates in an event-driven system.
+- **The fix.** **Argo Rollouts**: the policy (steps, pauses, analysis queries) lives in Git, the execution (moving
+  weights, querying Prometheus, promoting/aborting) is the controller's — every CI tag bump is now an SLO-gated
+  release with automatic abort. The async gap is handled by bounding canary consumer exposure
+  (`setCanaryScale: 1`), gating the analysis on the **canary pods' Kafka listener failure rate**, and documenting
+  the release invariant (event compatibility between adjacent versions).
+- **The lesson.** Validating that a mechanism does what its design *says* is necessary but not sufficient; the graded
+  question is what the design **fails to say** — here, that an HTTP weight doesn't canary a shared consumer group.
 
-First template-change rollout on AKS with analysis enabled: the controller aborted at step 0 — weights back
-to 100/0 stable with zero human action, which is the Fase-5 mechanism proven live — but the failed gate was
-a false positive. The success-rate query guards the no-traffic case with `or vector(1)`, which only fires
-when the result is EMPTY (no series). The canary had received a handful of early requests, so its series
-EXISTED; when the smoke token expired mid-ramp (401s land on uri="UNKNOWN", outside the query) the 2m rate
-windows went 0/0 = **NaN — a present sample the vector() guard cannot replace**, and `NaN >= 0.99` is false:
-4 consecutive Failed measurements -> abort. **Fix:** `isNaN(result[0]) || ...` in every successCondition
-(the pattern Argo Rollouts documents for exactly this). **Lesson:** PromQL has TWO distinct "no data"
-shapes — empty vector and NaN sample — and a gate must be immune to both; a canary with no traffic is
-"no evidence of failure", never "failure".
+## 7. Tracing looked wired but exported nothing — Spring Boot 4 renamed the OTLP endpoint property
 
-## 25. Fase 4/5/6 live dry-run (03/07) — five environment truths the desk checks couldn't have surfaced
+- **What the agent produced.** The tracing setup carried over from Boot 3: the app declared the tracing/OTLP
+  dependencies, set `management.tracing.sampling.probability: 1.0`, and pointed
+  `management.otlp.tracing.endpoint` at the collector. Everything *looked* configured.
+- **Why it was wrong.** The first AKS run showed `traceId`/`spanId` in every log line (so the tracer was active
+  and sampling) — yet the collector received **zero spans** and no service logged an export error. Boot 4 moved the
+  OTLP tracing endpoint property to `management.opentelemetry.tracing.export.otlp.endpoint`. With nothing bound at
+  the new name, `OtlpTracingAutoConfiguration` creates **no exporter at all** — which is why it failed *silently*:
+  no exporter means no export attempts, so not even a connection-refused error. (Same Boot-4 modularization also
+  meant the tracing auto-config only activates with the dedicated `spring-boot-micrometer-tracing-opentelemetry`
+  module — without it the deps were inert.)
+- **How we caught it.** By validating the **sink**, not the app: we checked whether the collector actually received
+  spans, instead of trusting the in-process evidence (log traceIds prove the tracer, not the pipeline).
+- **The fix.** Inject the Boot-4 property name from the chart (kept alongside the old name until the app yml dropped
+  its stale key). Cross-Kafka traces then appeared end-to-end in Tempo.
+- **The lesson.** "Dependency on the classpath + property set" does not mean "feature active". A major-version
+  framework upgrade relocates both auto-configurations and property names, and the failure mode is **silent** — so
+  the proof must be positive (data at the sink), never the absence of errors.
 
-Running the demo runbook end-to-end on AKS from scratch surfaced things that only a live cluster shows:
-- **Tempo datasource URL wrong**: the grafana/tempo chart serves HTTP on **3200**, not 3100 — the
-  exemplar->trace click-through 502'd until fixed. (Yesterday's trace checks passed only because I'd
-  port-forwarded to whatever port answered.)
-- **saga terminal-ratio rule silently empty**: `sum(increase(orders_rejected_total[30m]))` is an EMPTY
-  vector until the first rejection EVER exists, and PromQL `empty + x = empty` -> the whole recording rule
-  produced nothing. Guarded both addends with `or vector(0)` (same family as the NaN gate fix, #24).
-- **exemplar-storage is a feature flag**: the exemplars the app already emits (OpenMetrics `# {trace_id=...}`)
-  were dropped by Prometheus until `--enable-feature=exemplar-storage` was set via the stack values.
-- **Chaos Mesh socket path mangled by Git Bash**: `--set chaosDaemon.socketPath=/run/containerd/...` became
-  `C:/Program Files/Git/run/containerd` (MSYS path conversion) -> chaos-daemon CrashLoopBackOff. Needs
-  `MSYS_NO_PATHCONV=1`. Its webhook cert also needs ~30s to propagate before the first NetworkChaos applies.
-- **chaos-07 latency is a narrow band**: 2s on the canary->DB path trips the readiness DB probe (abort via
-  ProgressDeadlineExceeded, not the SLO gate); 700ms at 5% weight is too few samples to move the p99. The
-  abort MECHANISM is proven either way (stable stayed at 100/0, never promoted, never degraded) — but the
-  clean "the analysis gate aborts it" story needs ~1.2s injected at >=25% weight. Documented in the runbook
-  and the manifest rather than pretending a single magic number works.
+---
+
+_Team-owned. New entries are added as real mistakes are caught; the bar is a genuine defect, verified against the
+source and (where it's code) pinned by a test._

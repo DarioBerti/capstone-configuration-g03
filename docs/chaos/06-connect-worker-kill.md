@@ -1,3 +1,6 @@
+<!-- #DA ELIMINARE -->
+> **⚠️ TO BE DELETED (#DA ELIMINARE)** — Chaos content consolidated into the configuration repo README §6 (the spec requires the reports, not 8 separate files); run commands live in demo-runbook §8. Kept for now; remove in one pass when the repo is final (grep `#DA ELIMINARE`).
+
 # Experiment 06 — Kafka Connect worker kill (Debezium CDC HA)
 
 **Maps to:** the async cutover's new critical dependency — **Debezium is now the only path from a committed

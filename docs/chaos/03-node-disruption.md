@@ -1,3 +1,6 @@
+<!-- #DA ELIMINARE -->
+> **⚠️ TO BE DELETED (#DA ELIMINARE)** — Chaos content consolidated into the configuration repo README §6 (the spec requires the reports, not 8 separate files); run commands live in demo-runbook §8. Kept for now; remove in one pass when the repo is final (grep `#DA ELIMINARE`).
+
 # Experiment 03 — Node / AZ-style disruption
 
 **Maps to:** capstone chaos #3 · already partly validated live: see `fase2-6-k8s-validation.md`

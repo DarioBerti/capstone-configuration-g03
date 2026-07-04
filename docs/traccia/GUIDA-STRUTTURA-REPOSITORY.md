@@ -1,3 +1,6 @@
+<!-- #DA ELIMINARE -->
+> **⚠️ TO BE DELETED (#DA ELIMINARE)** — Obsolete repo guide (pre-async, sync architecture); superseded by the READMEs. Kept for now; remove in one pass when the repo is final (grep `#DA ELIMINARE`).
+
 # Guida ai repository EuroTransit (g03) — stato, contenuto, sintassi
 
 > Aggiornata al 10/06/2026 (post Fase 1 Inventory). Spiega **cosa c'è** nelle due cartelle,

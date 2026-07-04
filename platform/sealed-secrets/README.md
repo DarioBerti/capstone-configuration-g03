@@ -1,6 +1,6 @@
 # Sealed Secrets — platform component
 
-The Sealed Secrets controller is installed once per cluster (Lab04). Secrets live in Git
+The Sealed Secrets controller is installed once per cluster. Secrets live in Git
 **only** as `SealedSecret`s; plaintext `Secret` manifests are never committed (enforced by
 `.gitignore` and the PR policy checks).
 
