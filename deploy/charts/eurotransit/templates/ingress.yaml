@@ -80,6 +80,14 @@ spec:
                 name: payments
                 port:
                   number: {{ .Values.services.payments.port }}
+          # /api/notifications/** -> Notifications (debug SPA opens the SSE stream that pushes saga updates)
+          - path: /api/notifications
+            pathType: Prefix
+            backend:
+              service:
+                name: notifications
+                port:
+                  number: {{ .Values.services.notifications.port }}
           # everything else -> the static SPA (history-mode fallback handled by nginx)
           - path: /
             pathType: Prefix

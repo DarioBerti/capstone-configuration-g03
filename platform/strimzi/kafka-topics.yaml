@@ -13,19 +13,6 @@
 # parallel; same key = same partition = per-order ordering) and replicas=3 (one copy per broker, so a
 # broker loss never loses events).
 ---
-# Saga trigger: Orders' outbox publishes it, Orders' saga consumes it ("listen to yourself")
-apiVersion: kafka.strimzi.io/v1
-kind: KafkaTopic
-metadata:
-  name: order-placed
-  namespace: kafka
-  labels:
-    # binds this topic to the "eurotransit" Kafka cluster
-    strimzi.io/cluster: eurotransit
-spec:
-  partitions: 3
-  replicas: 3
----
 # --- Commands: Orders -> Inventory / Payments ---------------------------------------------------------
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
@@ -166,6 +153,19 @@ apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: notification-requested
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+# Per-transition booking snapshot: Orders emits it via the outbox; Notifications consumes it and relays each
+# snapshot to the browser over SSE (replacing the SPA's status polling). Keyed by orderId for per-order ordering.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: order-status-changed
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit

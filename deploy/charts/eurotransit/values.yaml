@@ -203,7 +203,15 @@ services:
     criticalPath: true
     usesKafka: true
     secured: true
-    # Deliberately NO HPA: work is I/O-bound on the (mock) PSP + idempotency store
+    # PayPal (sandbox) server-to-server PSP. enabled:true flips PAYMENTS_PROVIDER=paypal in-cluster and injects
+    # the credentials + sandbox test card from the `paypal-api` secret (a committed SealedSecret in prod; the
+    # paypal.devSecrets-gated plaintext on kind). Set enabled:false to keep payments on the in-app mock PSP.
+    # NOTE: with enabled:true the `paypal-api` secret MUST exist in-cluster (same contract as orders-oidc).
+    paypal:
+      enabled: true
+      baseUrl: https://api-m.sandbox.paypal.com
+      secretName: paypal-api
+    # Deliberately NO HPA: work is I/O-bound on the external PSP + idempotency store
     hpa:
       enabled: false
   notifications:
@@ -218,9 +226,12 @@ services:
     db: null
     criticalPath: false
     usesKafka: true
-    # Notifications has no inbound business REST API (Kafka-only) -> nothing to protect with a token
-    secured: false
-    # Allowed to fail entirely (graceful degradation): one replica, no HPA, no PDB
+    # One authenticated surface only: the per-user SSE stream (/api/notifications/orders/{id}/events) that
+    # relays saga updates to the browser -> validate the caller's Keycloak token (lazy decoder, so readiness
+    # never couples to Keycloak). Still a pure sink: it never calls the money path.
+    secured: true
+    # Allowed to fail entirely (graceful degradation): one replica, no HPA, no PDB. Single-replica is also what
+    # lets the SSE hub hold every connection AND consume every event in one process — no cross-pod fan-out.
     hpa:
       enabled: false
   users:
@@ -266,6 +277,22 @@ debezium:
     # dev-only password for the debezium replication role; the kafka-namespace Connect secret created by the
     # `debezium-kind-apply` justfile target uses the SAME value so the login matches. Prod uses sealed secrets.
     dbPassword: debezium-dev-pass
+
+# PayPal sandbox credentials for the payments PSP integration (consumed via services.payments.paypal). In prod
+# the `paypal-api` secret is committed as a SealedSecret (see deploy/README) and devSecrets stays false here. On
+# kind, values-kind.yaml flips devSecrets=true and fills paypal.dev.* so the real sandbox PSP can be exercised
+# without kubeseal. Get these from developer.paypal.com -> Sandbox -> a REST app with Advanced Card Payments
+# enabled, plus a sandbox test card.
+paypal:
+  devSecrets: false
+  dev:
+    clientId: ""
+    clientSecret: ""
+    testCard:
+      number: ""
+      expiry: ""    # YYYY-MM
+      cvv: ""
+
 # NOTE: `postgresql.synchronous` requires CloudNativePG >= 1.25
 databases:
   catalog-db:
