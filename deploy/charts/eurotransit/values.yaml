@@ -156,7 +156,7 @@ services:
     # Service selector atomically (manual gate: `kubectl argo rollouts promote orders`); rollback = `undo`.
     # The async caveat applies double here: the preview consumes saga replies at full share BEFORE promotion.
     rollout:
-      strategy: canary
+      strategy: bluegreen
       canary:
         # Each step: (optional) pin the canary ReplicaSet size, set the TraefikService weight, hold `pause`
         # while the analysis runs. `canaryReplicas` bounds the Kafka consumer-side exposure; `matchTrafficWeight`
