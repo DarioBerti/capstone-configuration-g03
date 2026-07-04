@@ -116,8 +116,8 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      #tag: 775b8af
-      tag: a1e995a
+      tag: 775b8af
+      #tag: a1e995a
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -157,7 +157,7 @@ services:
     # Service selector atomically (manual gate: `kubectl argo rollouts promote orders`); rollback = `undo`.
     # The async caveat applies double here: the preview consumes saga replies at full share BEFORE promotion.
     rollout:
-      strategy: bluegreen
+      strategy: canary
       canary:
         # Each step: (optional) pin the canary ReplicaSet size, set the TraefikService weight, hold `pause`
         # while the analysis runs. `canaryReplicas` bounds the Kafka consumer-side exposure; `matchTrafficWeight`
