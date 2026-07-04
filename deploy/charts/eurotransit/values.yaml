@@ -92,7 +92,7 @@ services:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
       repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
-      tag: a1d2b2e
+      tag: 775b8af
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
     # baseline replica count (also the HPA floor / PDB reference)
@@ -116,7 +116,7 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: a1d2b2e
+      tag: 775b8af
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -180,7 +180,7 @@ services:
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: a1d2b2e
+      tag: 775b8af
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -194,7 +194,7 @@ services:
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: a1d2b2e
+      tag: 775b8af
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -216,7 +216,7 @@ services:
   notifications:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/notifications
-      tag: a1d2b2e
+      tag: a1e995a
       pullPolicy: IfNotPresent
     # single replica: this service is allowed to be fully down (graceful degradation)
     replicaCount: 1
@@ -236,7 +236,7 @@ services:
   users:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/users
-      tag: a1d2b2e
+      tag: 775b8af
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -355,29 +355,35 @@ databases:
     instances: 1
     database: usersdb
     owner: users
-# Default container resources for the services (no CPU limit: avoid throttling spikes; memory limit bounds the JVM blast radius)
+# Default container resources for the JVM services (no CPU limit ON PURPOSE: a CPU limit throttles a
+# latency-sensitive JVM — esp. during JIT warmup — and hurts the ack SLO; the memory limit bounds the OOM
+# blast radius instead). Sized from LIVE measurement on AKS (03/07): steady RSS was 310-422Mi (orders is
+# the fleet outlier), i.e. the old 256Mi request UNDER-stated real use (scheduler booked less than reality
+# -> node memory pressure the scheduler couldn't see) and the old 512Mi limit sat ~82% full at rest -> under
+# load/chaos it brushed ~95% = OOM risk (the "pods at 95%" Riccardo saw on k9s). Now: request 384Mi = fleet
+# steady-state (never below real for 5/6 services; orders' 422 is covered by the limit, a request is a
+# scheduling floor, not a cap), limit 640Mi = peak + ~50% headroom so a GC/load spike never OOM-kills mid-chaos.
 resources:
-  # guaranteed share the scheduler reserves
+  # guaranteed share the scheduler reserves (≈ measured steady-state RSS)
   requests:
     cpu: 50m
-    memory: 256Mi
+    memory: 384Mi
   # hard ceiling (memory only -> a CPU limit would throttle latency-sensitive spikes)
   limits:
-    memory: 512Mi
+    memory: 640Mi
 # Resources for every PostgreSQL instance (applied to all Cluster CRs).
-# cpu request lowered 100m -> 50m. After Fase 4 the kube-prometheus-stack's
-# reservations pushed the SUM of CPU requests past node allocatable (~5.4 vCPU on 3x B2s_v2),
-# leaving the CNPG standbys (orders-db-2 and inventory-db-2, just because those were the last)
-# stuck Pending: Insufficient cpu.
-# This is a SCHEDULER-BOOKING fix, not a capacity one: real CPU use is ~50% and there is no
-# CPU limit, we only shrink the reservation so the standbys fit.
-# Targeted at the DBs on purpose: they have no HPA, so unlike the app services lowering the
-# request has no autoscaling side-effect. 
-# Quota is capped at 6 vCPU (no 4th node possible), so we book less rather than buy more.
+# CPU request 50m: real CNPG CPU is ~7-24m, so 50m is already a generous floor (kept; no CPU limit, same
+# rationale as the services). Memory request lowered 256Mi -> 192Mi from LIVE measurement (03/07): the DBs
+# use only 68-155Mi at rest, so 256Mi over-booked ~100Mi of phantom memory each x8 instances = ~800Mi the
+# scheduler reserved but nobody used. 192Mi stays comfortably ABOVE the 155Mi peak (deliberately slightly
+# over, never under). The 512Mi LIMIT is kept generous ON PURPOSE: a DB can spike on a failover / WAL replay
+# / checkpoint, and this is exactly what chaos #5 exercises — we don't want a promotion to OOM.
+# Quota is capped at 6 vCPU (no 4th node possible), so honest booking matters: freeing phantom reservations
+# is how we make room without shrinking HA.
 databaseResources:
   requests:
     cpu: 50m
-    memory: 256Mi
+    memory: 192Mi
   limits:
     memory: 512Mi
 # Observability (Pillar D): what the kube-prometheus-stack should scrape and which SLO alerts to evaluate.

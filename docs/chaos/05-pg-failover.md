@@ -23,7 +23,7 @@ failover. The experiment now has TWO invariants to prove, and the second is the 
 - **Method:** Chaos Mesh `PodChaos` pod-kill selecting `cnpg.io/cluster=inventory-db, role=primary`, under
   steady reservation load. Manifest: `platform/chaos-mesh/05-pg-failover.yaml`.
 
-## Target posture (team decision pending — see FASI_PROGETTO "Decisioni aperte")
+## Target posture — DECIDED 2026-07-03: stay on PG16 (no failover slots)
 
 The prod-grade fix for part 2 is **PostgreSQL 17 failover slots** (`sync_replication_slots=on` + the slot
 created with `failover=true`): the slot is synchronized to the standbys, so after promotion Debezium resumes

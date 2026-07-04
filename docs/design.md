@@ -58,8 +58,11 @@ idempotenti); orders non è accoppiato alla disponibilità dei downstream.
 
 ### B. Consistency under contention (Pilastro B)
 Decisioni 1-3. Two-phase hold→commit → compensazioni pulite. La sync replication CNPG garantisce l'invariante anche
-sotto failover (RPO=0). **Nota aperta:** lo slot logico di Debezium non fa failover nativo su PG → dopo un failover CNPG
-il CDC va ripristinato (mitigazione + verifica nel chaos #5).
+sotto failover (RPO=0). **Postura decisa (03/07, team):** lo slot logico di Debezium non fa failover nativo su PG16 e restiamo su PG16
+(niente PG17 failover-slots): dopo un failover CNPG il connector ricrea lo slot sul nuovo primary; gli eventi del
+gap si auto-riparano per il money path (sweeper → nuove righe outbox; reply ri-emesse dagli handler idempotenti) e
+la perdita permanente è confinata alle notification best-effort — degradazione accettata, sorvegliata dall'alert
+connector-down e verificata dal chaos #5.
 
 ### C. Resilience engineering (Pilastro C)
 - **Backpressure all'edge**: `@RateLimiter` su `POST /api/orders` → **429 + Retry-After** sotto sovraccarico (rifiuto
@@ -144,7 +147,7 @@ il CDC va ripristinato (mitigazione + verifica nel chaos #5).
 ## 5. Note aperte / prossimi prod-grade
 - **Leftover sync** (orders `oidcClient`/`extraEnv`, client `orders-svc`, secret `orders-oidc`) — **rimossi**.
 - **Bulkhead/breaker**: da reintrodurre solo attorno all'egress esterno (decisione legata a **PayPal** sì/no).
-- **KEDA** (autoscaling consumer su lag), **slot-failover Debezium**, **@RetryableTopic** (retry non-bloccante) —
-  da valutare per il prod-grade.
+- **KEDA** (autoscaling consumer su lag), **@RetryableTopic** (retry non-bloccante) — da valutare per il
+  prod-grade. (~~slot-failover Debezium~~ → deciso NO il 03/07, v. §4-B.)
 - **Fase 6**: chaos da riscrivere per l'async (01 payments-latency, 04 kafka-partition centrale, + kill Connect /
   failover CNPG-slot).

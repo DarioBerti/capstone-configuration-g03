@@ -62,8 +62,12 @@ spec:
           mountPath: /mnt/debezium-db
           readOnly: true
   resources:
+    # cpu request trimmed 250m->100m: each worker idles at ~10-30m (JMX/CDC is not CPU-bound) so 250m only
+    # reserved scheduler headroom it never used, and on a 6-vCPU cluster that reservation starved the canary's
+    # extra orders replica (Pending: Insufficient cpu). No cpu limit is set, so workers still burst freely at
+    # startup; this only frees ~450m of over-reserved scheduling capacity. memory left as-is (JVM Xmx=512m).
     requests:
-      cpu: 250m
+      cpu: 100m
       memory: 768Mi
     limits:
       memory: 1Gi

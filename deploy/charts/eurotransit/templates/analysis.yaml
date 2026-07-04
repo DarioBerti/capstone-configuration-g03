@@ -57,6 +57,15 @@ spec:
     - name: canary-intake-ack-p99
       interval: 30s
       failureLimit: 3
+      # A freshly-started JVM canary serves its first requests slowly (JIT + connection-pool + class-load
+      # warmup, ~30-90s); at low weight those cold outliers ARE the p99 and would abort a healthy release on
+      # a FALSE signal (warm p99 on the sibling services is ~20-50ms vs the 0.3s objective — huge headroom).
+      # initialDelay skips the warmup window before judging LATENCY only: the correctness gates (success-rate,
+      # consumer-failures) still run from step 0, so a genuinely broken canary is aborted immediately. Keep
+      # the rate window TIGHT ([2m], not wider) — a wide window keeps the stale cold-start samples inside the
+      # p99 long after the pod warmed and re-fails a healthy canary; [2m] tracks CURRENT latency and, at the
+      # ramp's traffic, still holds plenty of samples.
+      initialDelay: 3m
       successCondition: isNaN(result[0]) || result[0] <= {{ $obs.checkoutAckP99Seconds }}
       provider:
         prometheus:

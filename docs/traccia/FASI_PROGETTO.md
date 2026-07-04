@@ -4,12 +4,12 @@
 una fase cambia stato. Il **design + scelte implementative** (alto livello) sta in `docs/design.md`; gli errori
 degli agenti (gradato) in `docs/agent-log.md`.
 
-> **DOVE SIAMO (02/07/2026):** Fasi 0-5 fatte; il money path è stato **riscritto da HTTP sincrono a saga async
-> Kafka command/reply** + **Debezium CDC** (outbox letto dal WAL, no relay a polling) — mergiato in `app/dev` e
-> `config/main`. Leftover sync rimossi; docs consolidati (design.md unico per repo). **Fase 5 rifatta prod-grade:
-> Argo Rollouts** (canary SLO-gated con abort automatico; D9 chiusa). **Resta:** resilienza async da ri-collocare
-> (decisione PayPal/KEDA — Fase 2), tracing (Riccardo), monitoring CDC/lag (Dario, Fase 4) e la **Fase 6**
-> (chaos, da riscrivere sull'async). Cluster AKS **fermo** (zero costi).
+> **DOVE SIAMO (03/07/2026):** Fasi 0-5 **fatte e validate LIVE su AKS** (primo deploy async: money path
+> CONFIRMED E2E, CDC su, tracing cross-Kafka in Tempo, ramp canary SLO-gated + abort automatico). Fase 4
+> CHIUSA (incluso #8 exemplar/Tempo-datasource). Decisioni: **D9=Rollouts**, **PG17 failover-slots=NO**
+> (perdita notification accettata). **Resta:** Fase 6 esecuzione (8 runbook pronti — Chaos Mesh su AKS +
+> sessione live + postmortem + demo), Fase 2 ri-collocazioni (PayPal/KEDA, con Riccardo), seal dei secrets.
+> Cluster AKS **fermo** salvo sessioni (sempre `az aks stop` a fine).
 
 Legenda: ✅ fatto · 🔄 in corso · ⬜ da fare
 
@@ -20,7 +20,7 @@ Legenda: ✅ fatto · 🔄 in corso · ⬜ da fare
  Fase 3  Piattaforma su cluster ✅   ← verificata su AKS; + Debezium (Kafka Connect 3 repliche, CNPG logical)
  Fase 4  Observability          ✅   ← VALIDATA LIVE su AKS 03/07: lag+CDC+DLT+SLI saga+tracing cross-Kafka E2E
  Fase 5  Progressive delivery   ✅   ← Argo Rollouts VALIDATO su AKS 03/07: ramp 3 gate×19 ok + abort automatico
- Fase 6  Chaos + postmortem     ⬜   ← 5 esperimenti (da riscrivere per l'async) + postmortem + demo
+ Fase 6  Chaos + postmortem     🔄   ← 8 runbook async PRONTI; resta: Chaos Mesh su AKS + sessione live + demo
 ```
 
 Riferimenti: `docs/design.md` (design + scelte), `capstone-application-g03/NOTE_IT.md` (strati di un servizio),
@@ -55,8 +55,10 @@ Col cutover async, il breaker/bulkhead/retry **sincroni** sono stati **ritirati*
 - ✅ **Debezium CDC** (async rework): Strimzi **Kafka Connect (3 repliche, HA)** + connector per servizio (Argo-managed) +
   CNPG in **logical replication** (`wal_level=logical` + role di replication). Sostituisce il relay a polling.
 - ✅ CI → bump `image.tag` su config (mai credenziali cluster). Money-path verificato `→ CONFIRMED`.
-- ⬜ **Nota aperta:** lo slot logico Debezium non fa failover nativo su PG → dopo un failover CNPG il CDC va
-  ripristinato (mitigazione + verifica nel chaos #5).
+- ✅ **DECISO (03/07): restiamo su PG16, niente failover-slots.** Lo slot logico muore col primary; il money
+  path si auto-ripara (sweeper ri-emette i comandi, handler idempotenti ri-emettono le reply) e la perdita
+  permanente è confinata alle **notification best-effort** — degradazione accettata e documentata (design §4-B).
+  Il chaos #5 verifica esattamente questa postura + l'alert connector-down.
 
 ## Fase 4 — Observability ✅ (VALIDATA LIVE su AKS 03/07 — stack completo)
 > **Validazione live 03/07** (post-merge PR #16/#17/#18 config + #10/#11 app, primo deploy async su AKS):
@@ -73,13 +75,11 @@ Col cutover async, il breaker/bulkhead/retry **sincroni** sono stati **ritirati*
 - ✅ **Dashboard as-code** (RED per servizio + Runtime/golden-signals) caricate in Grafana.
 - ✅ **Fix capacità (PR #9, verificato LIVE 30/06):** CPU requests `100m→50m` (fix di booking) → gli standby CNPG
   schedulano, observability + HA CNPG **coesistono** sui 3× B2s_v2.
-- 🔄 **Tracing cross-Kafka (implementato 02/07, da validare E2E)**: il producer è **Debezium, non la
-  KafkaTemplate** → il contesto W3C si persiste come colonna `traceparent` della riga outbox (stessa tx,
-  branch app `fase-4-tracing`) e l'EventRouter lo mappa a header Kafka
-  (`table.fields.additional.placement`); consumer con `listener.observation-enabled`. Da validare su kind:
-  una traccia unica orders→inventory→payments in Tempo. ⚠️ verifica post-deploy: il tag `result` di
-  `spring_kafka_listener_seconds` può cambiare con l'observation → gate `canary-consumer-failures` di
-  Fase 5 da ricontrollare (v. agent-log #21).
+- ✅ **Tracing cross-Kafka (implementato 02/07, VALIDATO live 03/07)**: il producer è **Debezium, non la
+  KafkaTemplate** → il contesto W3C si persiste come colonna `traceparent` della riga outbox (stessa tx) e
+  l'EventRouter lo mappa a header Kafka; consumer con `listener.observation-enabled`. Validato su AKS:
+  orders+inventory+notifications nella STESSA traccia in Tempo. (Il warning #21 sul tag `result` era fondato:
+  fixato col tag observation `error!="none"` — agent-log #22.)
 - ✅ **Consumer-lag + DLT + CDC monitoring (02/07, branch `fase-4-observability`)**: kafka-exporter sui due CR
   Kafka + PodMonitor (`platform/strimzi/monitoring.yaml`, label `group` clonata da `consumergroup` per i
   runbook Fase 6); JMX Connect/Debezium (`platform/debezium/connect-metrics.yaml` + `monitoring.yaml`) con
@@ -93,8 +93,13 @@ Col cutover async, il breaker/bulkhead/retry **sincroni** sono stati **ritirati*
 - ✅ **Cardinalità + sampling (02/07)**: policy in design.md §4-D (uri templated, mai per-partizione/per-pod,
   doppio-scrape a riposo → pannelli throughput in vista stable; identity label NON droppate);
   `tail_sampling` sul Collector gateway (immagine contrib: errori+lenti al 100%, resto 10%).
-- ⬜ **Ultima miglia correlazione (#8, rimandata)**: datasource Tempo in Grafana + exemplar (metric↔trace);
-  Loki opzionale (i log ECS portano già traceId/spanId).
+- ✅ **Ultima miglia correlazione (#8, 03/07)**: Tempo = datasource Grafana (uid pinnato) + **exemplar**
+  (Prometheus `exemplar-storage` + `exemplarTraceIdDestinations` sul datasource di default → il pallino sul
+  pannello apre la traccia in Tempo) — tutto in `kube-prometheus-values.yaml`; su AKS va ri-applicato con
+  l'`helm upgrade -f` (da fare all'avvio della sessione chaos, con verifica visiva del click-through).
+  **Loki = non-goal documentato**: i log ECS portano già traceId/spanId → correlazione log↔trace by-id.
+- ✅ **Cosmetico app chiuso (03/07)**: property OTLP rinominata al nome Boot 4 nei 6 `application.yml`
+  (l'env legacy nel chart è stata rimossa: su Boot 4 non bindava nulla).
 
 ## Fase 5 — Progressive delivery ✅ (Argo Rollouts — VALIDATO LIVE SU AKS 03/07)
 > **Su AKS**: migrazione Deployment→Rollout live; primo ramp reale 5→25→50→100 **gated dall'analysis su
@@ -120,8 +125,7 @@ runbook `platform/argo-rollouts/README.md`.
   `platform/chaos-mesh/`): 01 payments-latency (consumer lento = lag+sweeper, non errori — il rimpiazzo del
   breaker sotto test); 02 pod-kill inventory (never-oversell sotto redelivery); 03 node disruption; 04
   kafka-partition (**il centrale**: outage = ritardo, mai corruzione); 05 failover CNPG (RPO=0 **+ CDC
-  riprende** — due posture: PG16 self-healing via sweeper / PG17 failover slots = zero-gap, decisione
-  pendente); **06 kill worker Kafka Connect** (HA del CDC); **07 chaos sul canary → auto-abort Rollouts**
+  riprende** — postura DECISA (03/07): PG16 self-healing via sweeper, perdita notification accettata); **06 kill worker Kafka Connect** (HA del CDC); **07 chaos sul canary → auto-abort Rollouts**
   (lega F5+F6, candidato demo/postmortem); **08 poison message → DLT** (la claim core del Pilastro C,
   provata). Traceability test→esperimenti riscritta sui test attuali.
 - ⬜ **Esecuzione live su AKS** (sessione team): run degli 8 in ordine (v. `docs/chaos/README.md`), evidence
@@ -135,7 +139,8 @@ runbook `platform/argo-rollouts/README.md`.
 - **Resilienza async**: quali pattern re-introdurre (bulkhead esplicito? KEDA? breaker attorno a PayPal?) — vedi Fase 2.
 - **PayPal**: PSP reale vs mock (la traccia è domain-agnostica → mock accettabile; PayPal = polish + home del breaker).
 - ~~**D9**: TraefikService vs Argo Rollouts~~ → **CHIUSA 02/07: Argo Rollouts** (canary analysis automatica sulle SLO; v. Fase 5).
-- **Debezium slot-failover**: mitigazione per il failover CNPG.
+- ~~**Debezium slot-failover**~~ → **CHIUSA 03/07: NO PG17** — restiamo su PG16; il sweeper self-heals il money
+  path nel gap, la perdita notification (best-effort) è accettata. Il chaos #5 dimostra questa postura.
 
 ## Verificare in locale
 ```bash

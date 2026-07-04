@@ -22,10 +22,15 @@ spec:
   roles:
     - controller
     - broker
-  # bound the per-node footprint (right-size, don't shrink HA)
+  # bound the per-node footprint (right-size, don't shrink HA). Sized from LIVE measurement (03/07):
+  #  - CPU request 100m: real broker CPU is ~27-30m at rest, so 100m is a generous 3x floor (no CPU limit,
+  #    same rationale as the services -> a broker can burst on rebalance/recovery without throttling).
+  #  - MEMORY request 768Mi: real RSS is ~715-730Mi (512m heap + page cache + off-heap). An earlier trim to
+  #    640Mi was BELOW real usage — a mistake — so it is restored to 768Mi (never under-request). The 1Gi
+  #    limit leaves ~40% headroom for GC/recovery spikes, incl. under chaos #4.
   resources:
     requests:
-      cpu: 250m
+      cpu: 100m
       memory: 768Mi
     limits:
       memory: 1Gi
@@ -66,10 +71,25 @@ spec:
       offsets.topic.replication.factor: 3
       transaction.state.log.replication.factor: 3
       transaction.state.log.min.isr: 2
-  # operators that reconcile KafkaTopic / KafkaUser CRs into real topics/users
+  # operators that reconcile KafkaTopic / KafkaUser CRs into real topics/users. Without explicit resources
+  # Strimzi leaves these two containers UNBOUNDED (no request, no limit) — flagged on k9s (Riccardo, 03/07):
+  # an unbounded pod can't be scheduled predictably and a leak could starve a node. Bound both from measured
+  # use (entity-operator ~387Mi combined at rest) with headroom.
   entityOperator:
-    topicOperator: {}
-    userOperator: {}
+    topicOperator:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 384Mi
+    userOperator:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 384Mi
   # Kafka Exporter (Fase 4): broker-side consumer-group lag + per-topic offsets, scraped by Prometheus
   # via the PodMonitor in monitoring.yaml. This is the metric source the chaos runbooks and the Kafka
   # dashboard query (kafka_consumergroup_lag, kafka_topic_partition_*_offset) — deliberately the
