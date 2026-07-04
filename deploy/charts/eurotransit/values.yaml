@@ -92,7 +92,7 @@ services:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
       repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
-      tag: 775b8af
+      tag: 8ed53f1
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
     # baseline replica count (also the HPA floor / PDB reference)
@@ -116,7 +116,7 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: 775b8af
+      tag: 8ed53f1
       #tag: a1e995a
       pullPolicy: IfNotPresent
     replicaCount: 2
@@ -181,7 +181,7 @@ services:
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: 775b8af
+      tag: 8ed53f1
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -195,7 +195,7 @@ services:
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: 775b8af
+      tag: 8ed53f1
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -217,7 +217,7 @@ services:
   notifications:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/notifications
-      tag: a1e995a
+      tag: 8ed53f1
       pullPolicy: IfNotPresent
     # single replica: this service is allowed to be fully down (graceful degradation)
     replicaCount: 1
@@ -237,7 +237,7 @@ services:
   users:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/users
-      tag: 775b8af
+      tag: 8ed53f1
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -277,7 +277,6 @@ debezium:
     # dev-only password for the debezium replication role; the kafka-namespace Connect secret created by the
     # `debezium-kind-apply` justfile target uses the SAME value so the login matches. Prod uses sealed secrets.
     dbPassword: debezium-dev-pass
-
 # PayPal sandbox credentials for the payments PSP integration (consumed via services.payments.paypal). In prod
 # the `paypal-api` secret is committed as a SealedSecret (see deploy/README) and devSecrets stays false here. On
 # kind, values-kind.yaml flips devSecrets=true and fills paypal.dev.* so the real sandbox PSP can be exercised
@@ -290,9 +289,8 @@ paypal:
     clientSecret: ""
     testCard:
       number: ""
-      expiry: ""    # YYYY-MM
+      expiry: "" # YYYY-MM
       cvv: ""
-
 # NOTE: `postgresql.synchronous` requires CloudNativePG >= 1.25
 databases:
   catalog-db:
