@@ -36,6 +36,17 @@ spec:
       kind: TraefikService
       managedFieldsManagers:
         - argo-rollouts
+    # CloudNativePG: the operator's mutating webhook DEFAULTS a large part of the Cluster .spec that our
+    # minimal Git manifest doesn't set (affinity, enablePDB, enableSuperuserAccess, failoverDelay,
+    # bootstrap.initdb locale, postgresql.parameters, probes, ...). Those fields are owned by the operator's
+    # field manager ("manager"), NOT by argocd-controller, so Argo saw them as a perpetual drift -> the 4
+    # DB Clusters stayed OutOfSync forever (verified 04/07: it was CNPG, NOT the Rollouts fields). Ignoring
+    # the operator-owned fields makes Argo compare only what WE declare. Purely cosmetic (the DBs work); this
+    # just removes the false yellow so a REAL drift wouldn't hide in the noise.
+    - group: postgresql.cnpg.io
+      kind: Cluster
+      managedFieldsManagers:
+        - manager
   syncPolicy:
     # automated = reconcile without a human clicking "Sync":
     #   prune    -> delete cluster resources that were removed from Git
