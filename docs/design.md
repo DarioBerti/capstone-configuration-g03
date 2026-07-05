@@ -73,6 +73,25 @@ connector-down e verificata dal chaos #5.
   PSP reale/PayPal) — allora via `@CircuitBreaker/@Retry/@TimeLimiter` (Boot 4, `resilience4j-spring-boot4` + aspectj starter).
 - **K8s**: PDB + topologySpread sui servizi `criticalPath`; probe (readiness=serve ora / liveness=processo); graceful
   shutdown; HPA (catalog/orders/users). *Prod-grade da valutare:* **KEDA** per scalare i consumer sul lag Kafka.
+- **Eviction deterministica sotto node-pressure (pool studentesco, 05/07)**: il pool `3×Standard_B2s_v2` è
+  memory-tight (~5.65Gi allocatable/nodo) → sotto memory pressure il kubelet sfratta *lowest-priority-first*, e senza
+  priorità esplicite tutti gli app-pod stanno a 0 ⇒ vittima casuale (il "pod killed at random"). Due **PriorityClass**
+  (`platform/priorityclasses.yaml`) rendono lo sfratto **deterministico**: `eurotransit-critical` (1e6 — money path
+  orders/inventory/payments **+ i broker Kafka**) sfrattato per ultimo e può preemptare l'osservabilità;
+  `eurotransit-platform` (1e5 — catalog/users/notifications/frontend) recuperabile, sfrattato dopo l'osservabilità;
+  l'**osservabilità resta a priority 0 → prima vittima**. Entrambe ≪ `system-cluster-critical` (2e9), così
+  CNI/DNS/metrics non vengono mai preemptati. Assegnate per-servizio in `_workload.tpl` via `svc.criticalPath`.
+- **Right-sizing a due tier** (request ≈ RSS live — leggermente sopra, mai sotto; **nessun CPU limit**, il throttling
+  danneggerebbe l'ack SLO): tier **LIGHT** `320Mi/512Mi` req/lim (catalog/users/notifications, RSS live 217-285Mi) e
+  tier **CRITICAL** `448Mi/640Mi` (money path, copre il picco ~422Mi di orders, outlier della flotta); DB a
+  `192Mi/512Mi`. **HPA di orders `maxReplicas` 4→3** (uno spike CPU di cold-start lo gonfiava a 4 pod senza bisogno
+  duraturo). Effetto verificato live: `MemoryPressure=False`, 0 OOM, money path 200 — risolve gli sfratti casuali.
+- **Caveat HA Kafka (pool disk-constrained)**: i 3 broker restano **co-locati** (nessuna anti-affinity). Lo spread
+  1-broker-per-nodo è fisicamente irrealizzabile: il 3° nodo non ha slot data-disk Azure liberi (stesso **soffitto
+  12-dischi** dietro la scelta inventory-db di Parte 2) ed è memory-full ⇒ un 3° broker (PVC 5Gi + 768Mi) non ci si
+  schedula mai (`required` → deadlock Pending; `preferred` → comunque non piazzato). Conseguenza: perdere il nodo che
+  ospita **2 broker** fa cadere il quorum KRaft → mitigazione operativa in **chaos-03: killare un nodo che NON detiene
+  la maggioranza dei broker**. Un disco Pay-As-You-Go riabiliterebbe lo spread hard.
 
 ### D. Delivery + observability (Pilastro D)
 - **GitOps**: Argo CD riconcilia `main`; drift self-heal + prune; secret in Git solo come **SealedSecrets**.
