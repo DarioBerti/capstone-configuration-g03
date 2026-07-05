@@ -11,7 +11,7 @@ report (the graded "chaos-proven" evidence) lives in the matching `docs/chaos/0X
 | 03 | `03-node-disruption.yaml` | `kubectl drain` (documented) | one node | PDB + topology spread (`docs/chaos/03-node-disruption.md`) |
 | 04 | `04-kafka-partition.yaml` | `NetworkChaos` partition | Orders ↔ Kafka | **central**: outage = delay, never corruption (`docs/chaos/04-kafka-partition.md`) |
 | 05 | `05-pg-failover.yaml` | `PodChaos` pod-kill | inventory-db primary | RPO=0 **+ CDC resumes** (`docs/chaos/05-pg-failover.md`) |
-| 06 | `06-connect-worker-kill.yaml` | `PodChaos` pod-kill | one Connect worker (of 3, ns `kafka`) | Debezium CDC HA (`docs/chaos/06-connect-worker-kill.md`) |
+| 06 | `06-connect-worker-kill.yaml` | `PodChaos` pod-kill | one Connect worker (of 2, ns `kafka`) | Debezium CDC HA (`docs/chaos/06-connect-worker-kill.md`) |
 | 07 | `07-canary-auto-abort.yaml` | `NetworkChaos` delay | canary pods → orders-db | Rollouts auto-abort on the SLO gates (`docs/chaos/07-canary-auto-abort.md`) |
 | 08 | *(no manifest — one `kafka-console-producer` command)* | poison record | `reserve-seats` topic | bounded retry → DLT (`docs/chaos/08-poison-message-dlt.md`) |
 

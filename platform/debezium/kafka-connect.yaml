@@ -14,7 +14,11 @@ metadata:
     strimzi.io/use-connector-resources: "true"
 spec:
   version: 4.3.0
-  replicas: 3
+  # 2 (was 3): Debezium PG connectors are single-task, so the connector work never parallelises across
+  # workers — extra workers are pure failover standby, not throughput. 2 is the MINIMUM that still keeps
+  # the HA story: killing one worker rebalances its task onto the survivor (chaos exp 06 still passes).
+  # Dropping the 3rd frees ~750Mi request / ~720Mi actual on the memory-packed nodes (see PROJECT_ISSUES).
+  replicas: 2
   bootstrapServers: eurotransit-kafka-bootstrap.kafka.svc:9092
   # prebuilt image = Strimzi Connect base + Debezium Postgres plugin (built from ./Dockerfile)
   image: labg03clusterregistry.azurecr.io/eurotransit/debezium-connect:1.0.0

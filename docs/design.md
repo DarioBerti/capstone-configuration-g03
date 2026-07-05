@@ -51,7 +51,7 @@ Money path = **saga orchestrata async**: `POST /api/orders` (202 Accepted, ack d
 `authorize-payment` → payments autorizza e risponde `payment-result` → orders emette `confirm-seats` + `capture-payment`
 → CONFIRMED. Compensazioni: `release-seats` / `cancel-authorization`. Stato reply-driven
 `PENDING→RESERVED→AUTHORIZED→CONFIRMED (+REJECTED)`; `OrderTimeoutSweeper` ri-guida gli ordini bloccati oltre la deadline.
-**Outbox→Kafka via Debezium CDC**: ogni servizio ha una tabella outbox; Debezium (Strimzi **Kafka Connect a 3 repliche**,
+**Outbox→Kafka via Debezium CDC**: ogni servizio ha una tabella outbox; Debezium (Strimzi **Kafka Connect a 2 repliche**,
 un connector per servizio) legge il WAL (CNPG `wal_level=logical` + role di replication) e pubblica sui topic. **DLT per
 servizio** + retry bounded. Recoverability: un servizio che crasha riprende leggendo i topic (at-least-once + handler
 idempotenti); orders non è accoppiato alla disponibilità dei downstream.

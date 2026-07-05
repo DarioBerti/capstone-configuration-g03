@@ -5,7 +5,7 @@
 # the task onto one of the 2 surviving workers, which resumes exactly where the slot's confirmed LSN left
 # off (server-side in PG; connector offsets live in Kafka) -> a publication gap of seconds, zero loss.
 #
-# MANUAL experiment, NOT GitOps. `mode: one` picks ONE of the 3 workers at random — for a deterministic run
+# MANUAL experiment, NOT GitOps. `mode: one` picks ONE of the 2 workers at random — for a deterministic run
 # find the worker hosting the orders-outbox task first (Connect REST /connectors/orders-outbox/status) and
 # kill that pod with kubectl instead:
 #   kubectl apply -f platform/chaos-mesh/06-connect-worker-kill.yaml
@@ -22,5 +22,5 @@ spec:
   selector:
     namespaces: [kafka]
     labelSelectors:
-      # Strimzi stamps every pod of the Connect cluster (platform/debezium/kafka-connect.yaml, replicas: 3)
+      # Strimzi stamps every pod of the Connect cluster (platform/debezium/kafka-connect.yaml, replicas: 2)
       strimzi.io/cluster: debezium-connect

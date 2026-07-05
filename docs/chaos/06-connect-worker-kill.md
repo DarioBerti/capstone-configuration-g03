@@ -2,9 +2,9 @@
 
 **Maps to:** the async cutover's new critical dependency — **Debezium is now the only path from a committed
 outbox row to Kafka**. A stopped CDC = a money path that accepts orders but never progresses them. This
-experiment proves the 3-replica Kafka Connect cluster makes that a self-healing non-event.
+experiment proves the 2-replica Kafka Connect cluster makes that a self-healing non-event.
 
-- **Steady state (SLIs):** the 3 Connect workers Ready (`strimzi.io/cluster=debezium-connect`, ns `kafka`);
+- **Steady state (SLIs):** the 2 Connect workers Ready (`strimzi.io/cluster=debezium-connect`, ns `kafka`);
   all three connectors + tasks `RUNNING`; outbox rows published within ~1 s (end-to-end order latency ~s).
 - **Hypothesis:** killing the worker that runs a connector task pauses that connector's publication for a
   few seconds only: Connect's group protocol detects the dead member and **rebalances the task onto a
@@ -12,7 +12,7 @@ experiment proves the 3-replica Kafka Connect cluster makes that a self-healing 
   LSN lives server-side in PostgreSQL and the connector offsets live in Kafka itself, so a worker death can
   lose **nothing**: at worst it re-reads unconfirmed WAL (at-least-once; consumers dedup). Meanwhile the
   intake keeps accepting durably (202 = row in PG) and a short outbox backlog accumulates, then drains.
-- **Blast radius / one variable:** one Connect worker pod (of 3), killed while a connector task runs on it.
+- **Blast radius / one variable:** one Connect worker pod (of 2), killed while a connector task runs on it.
 - **Method:** find the worker hosting the `orders-outbox` task
   (`kubectl -n kafka get kafkaconnector orders-outbox -o yaml | grep worker_id` or the Connect REST
   `/connectors/orders-outbox/status`), then Chaos Mesh `PodChaos` pod-kill on that pod, under k6 load.
