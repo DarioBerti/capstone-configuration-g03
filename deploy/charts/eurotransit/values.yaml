@@ -127,7 +127,7 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: e449409
+      tag: 4407f01
       #tag: a1e995a
       pullPolicy: IfNotPresent
     replicaCount: 2
@@ -194,7 +194,7 @@ services:
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: d5ac9a0
+      tag: 4407f01
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -208,7 +208,7 @@ services:
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: 8ed53f1
+      tag: 4407f01
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -230,7 +230,7 @@ services:
   notifications:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/notifications
-      tag: e449409
+      tag: 4407f01
       pullPolicy: IfNotPresent
     # single replica: this service is allowed to be fully down (graceful degradation)
     replicaCount: 1
