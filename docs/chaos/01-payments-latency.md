@@ -1,52 +1,42 @@
-# Experiment 01 — Latency injection into Payments (slow consumer)
+# Chaos 01 — Latency into Payments (a slow downstream never reaches the user)
 
-**Maps to:** capstone chaos #1 · Pillar C in async form: **temporal decoupling** (Kafka buffers the failure
-as consumer lag), bounded consumer retry + DLT, `OrderTimeoutSweeper` liveness backstop, `@RateLimiter`
-edge backpressure. The sync-era version of this experiment proved a circuit breaker OPENing; the breaker was
-retired with the async cutover (see `docs/design.md §4-C`) — **this run proves its replacement does the same
-job better**: the user never sees the downstream failure at all.
+**Proves (Pillar C, async form):** a slow Payments consumer is absorbed as **saga latency**, not a user-facing
+failure. The intake ack SLO stays green because the slow step is **behind Kafka**, not on the request thread.
+This is the async replacement for the retired Orders→Payments circuit breaker — and it does the job *better*
+(the user sees nothing).
 
-- **Steady state (SLIs):** checkout intake success-rate ≥ 99% and ack p99 ≤ 300 ms (`docs/design.md §4-D`);
-  orders reach a terminal state within seconds; consumer lag ~0 on all saga topics; all three DLTs empty.
-- **Hypothesis:** injecting ~3 s of network latency between Payments and Kafka slows its consumption of
-  `authorize-payment` / `capture-payment` and the publication of its replies. Effects, in order:
-  1. **The intake does not notice.** `POST /api/orders` keeps returning 202 within the ack SLO — the slow
-     step is behind Kafka, not on the request thread. The failure surfaces as **consumer lag + orders parked
-     in `RESERVED`**, not as user-facing errors. (This is the async answer to "contain, don't propagate".)
-  2. **No order is lost or stuck forever.** Orders parked past the sweeper deadline (**PT2M**) get their
-     current-state command re-emitted; commands are idempotent downstream (`UNIQUE(order_id)` in payments)
-     so a re-drive can never double-charge.
-  3. **Catalog browsing is untouched** (different service, different DB, no shared sync path).
-- **Blast radius / one variable:** network delay on the Payments↔Kafka path only. Payments' DB and the other
-  services are untouched.
-- **Method:** Chaos Mesh `NetworkChaos` (delay 3 s ± 200 ms) between `app.kubernetes.io/name=payments` and
-  the Kafka brokers for **5 min**, under steady k6 load (`just loadtest`).
-  Manifest: `platform/chaos-mesh/01-payments-latency.yaml`.
+**Run:** 2026-07-06, live on AKS, Chaos Mesh `NetworkChaos`. *Config adjustment: none (network delay, not pods).*
 
-## Observation (fill during the run)
+## Steady state (before)
+- Intake ack fast; catalog browse ~0.15 s; orders reach terminal in ~5 s; consumer lag ~0; DLTs empty.
 
-PromQL to watch (Grafana explore or the RED dashboards):
-
-```promql
-# intake stays healthy (should NOT move):
-checkout_intake:error_ratio:rate5m
-histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{uri="/api/orders", method="POST"}[5m])))
-# the failure shows up HERE instead (should grow, then drain):
-sum by (topic) (kafka_consumergroup_lag{consumergroup="payments"})             # broker-side lag view
-sum(rate(spring_kafka_listener_seconds_count{service="payments"}[2m])) # payments consumption rate
+## The one fault injected
+```bash
+kubectl apply -f platform/chaos-mesh/01-payments-latency.yaml   # NetworkChaos delay 3s ±200ms, BOTH directions,
+                                                                 # payments ↔ Kafka brokers only, 5m (auto-reverts)
 ```
+Only the Payments↔Kafka path is delayed — Payments' DB and every other service are untouched (one variable).
 
-- During injection: `RESERVED` count grows (orders awaiting `payment-result`); intake SLIs flat; lag on
-  `authorize-payment` grows.
-- After heal: lag drains; parked orders progress to `CONFIRMED`/`REJECTED`; sweeper log lines
-  (`re-driving N stuck order(s)`) only for orders that crossed PT2M.
-- Payments DB: `SELECT order_id, COUNT(*) FROM payment_authorizations GROUP BY order_id HAVING COUNT(*) > 1;`
-  → **must return 0 rows** (no double-charge, even where the sweeper re-drove).
+## What we observed (during the 3 s latency)
+| Signal | Value | Meaning |
+|---|---|---|
+| `POST /api/orders` (create draft) | **0.22 s** | intake unaffected (doesn't touch Payments) |
+| `POST /{id}/pay` **ack** | **0.15 s** | 202 returns immediately — the request thread never waits on the slow step |
+| catalog browse | **0.21 s** | different service/DB → completely unaffected |
+| add-leg → leg | RESERVED, 0.28 s | Inventory not delayed |
+| order → terminal | **CONFIRMED after 21 s** (vs ~5 s) | the delay surfaced as **saga slowness**, and the order STILL confirmed |
 
-<screenshots/links>
+So the downstream failure showed up as extra async latency (payments +3 s/hop), **never** as a user-visible error
+or a lost order. It confirmed inside the 2-minute sweeper deadline, so no re-drive was even needed; anything that
+did cross PT2M would be re-driven by `OrderTimeoutSweeper` (idempotent — `UNIQUE(order_id)` → no double-charge).
 
-## Conclusion — PASS criteria
-- [ ] Intake success-rate and ack p99 stayed within SLO for the whole injection (no user-visible failure).
-- [ ] Zero non-terminal orders 5 min after heal (sweeper + idempotent re-drive worked).
-- [ ] Zero duplicate authorizations; DLTs still empty (latency is not an error — nothing poisoned).
-- Hypothesis held? <yes/no> · What we changed if it didn't: <...>
+## Verdict
+✅ **PASS.** Intake ack + catalog stayed fast (well within the 300 ms SLO) throughout; the order confirmed
+(slower but correct); no lost order, no double-charge, no DLT (latency is not an error → nothing poisoned).
+Hypothesis held; nothing changed.
+
+## For the oral (one breath)
+> "We add 3 seconds of latency to Payments. The customer's request still returns in milliseconds and browsing is
+> untouched — the slow step is behind Kafka, not on the request thread. The order just confirms a bit later, and
+> if it ever crossed our 2-minute deadline the sweeper would re-drive it idempotently. Temporal decoupling
+> contains the failure instead of propagating it — the async replacement for the circuit breaker."

@@ -3,6 +3,16 @@
 One report per experiment. Each follows the scientific method from the resilience lecture.
 Manifests live in `platform/chaos-mesh/`.
 
+> **Before a Chaos Mesh session (this cluster):** the Chaos Mesh **control plane is scaled to 0** by default to
+> save memory on the tight 3× B2s_v2 pool (only the `chaos-daemon` DaemonSet stays). Any chaos CR then fails with
+> *"no endpoints available for service chaos-mesh-controller-manager"*. Scale it up first, wait ~30 s for the
+> webhook cert, run the experiments, then scale it back to 0:
+> ```bash
+> kubectl -n chaos-mesh scale deploy chaos-controller-manager --replicas=1   # before
+> kubectl -n chaos-mesh scale deploy chaos-controller-manager --replicas=0   # after
+> ```
+> (Experiment 08 is the exception — it needs no Chaos Mesh, just a produced message.)
+
 Report template (`NN-name.md`):
 
 ```
