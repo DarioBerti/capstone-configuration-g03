@@ -21,6 +21,15 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   keycloakCRName: keycloak
+  # The import runs as a short-lived `kc import` pod. Its default memory REQUEST is ~1700Mi, which does
+  # NOT schedule on our memory-packed nodes (a re-seed then hangs Pending with FailedScheduling:
+  # Insufficient memory) — cap it low: a one-client realm import needs nowhere near that. See
+  # keycloak-realm-import-gotchas.
+  resources:
+    requests:
+      memory: 512Mi
+    limits:
+      memory: 1Gi
   realm:
     realm: eurotransit
     enabled: true
