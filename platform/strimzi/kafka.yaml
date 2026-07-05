@@ -49,6 +49,10 @@ spec:
   # pool; it also rebalances memory off the previously overloaded node. (Losing a broker still keeps 2/3 = quorum.)
   template:
     pod:
+      # Kafka is load-bearing money-path infra -> critical priority: (1) it is evicted LAST under memory pressure,
+      # and (2) it lets a broker PREEMPT a priority-0 pod (observability) to claim its node when the anti-affinity
+      # forces it onto a full node (the 1-per-node guarantee below could otherwise leave a broker Pending).
+      priorityClassName: eurotransit-critical
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
