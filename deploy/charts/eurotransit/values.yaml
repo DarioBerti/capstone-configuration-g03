@@ -84,10 +84,16 @@ keycloak:
     extraRedirectUris: []
     extraWebOrigins: []
   devDirectAccessGrants: false
-  # Pre-seeded test accounts for the eurotransit realm. EMPTY in prod (real users come from Keycloak);
-  # values-kind.yaml populates it so a fresh kind cluster has ready-to-use logins. Each entry:
-  #   { username, email, firstName, lastName, password, roles: [USER|ADMIN ...] }
-  testUsers: []
+  # Pre-seeded test accounts for the eurotransit realm. values-kind.yaml adds more for local logins.
+  # Each entry: { username, email, firstName, lastName, password, roles: [USER|ADMIN ...] }
+  # NOTE: passwords here are PLAINTEXT in Git — keep this to throwaway TEST accounts only, never real users.
+  testUsers:
+    - username: admin
+      email: admin@eurotransit.test
+      firstName: Admin
+      lastName: Test
+      password: admin
+      roles: [USER]
 # Per-service desired state
 # "db" references a database name in ".databases" (or null)
 # "criticalPath" marks services on the money path (drives PDBs / spread / stricter SLOs)
