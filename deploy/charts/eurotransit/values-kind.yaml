@@ -131,6 +131,9 @@ services:
 # from the browser without running any service locally. Built + pushed by `just images-kind`.
 frontend:
   enabled: true
+  # kind keeps the broad /api/inventory + /api/payments debug routes (the local debug SPA reads them directly).
+  # Prod (base values.yaml) keeps this false so those internal surfaces are never publicly routed.
+  exposeInternalDebugRoutes: true
   image:
     repository: localhost:5001/eurotransit/frontend
     tag: dev

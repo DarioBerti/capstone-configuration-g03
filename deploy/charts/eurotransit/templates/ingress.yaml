@@ -1,7 +1,7 @@
 {{- /*
 North-south entrypoint (Traefik + cert-manager TLS)
 
-Only Catalog, Orders and Users are public (client -> gateway -> service). Inventory, Payments and Notifications are internal: reached via Kafka (the async saga), never directly from the internet!
+Public (client -> gateway -> service): Catalog, Orders, Users — plus, when the frontend is served here, the SPA at "/", the secured Notifications SSE stream, and a NARROW inventory read (/api/inventory/availability). Payments and the broad Inventory surface stay internal: reached via Kafka (the async saga), never directly from the internet! (The dev-only broad /api/inventory + /api/payments debug routes are gated separately on frontend.exposeInternalDebugRoutes.)
 
 Each service serves under its own path prefix (e.g. /api/orders, /api/catalog), so no strip-prefix middleware is needed. Fase 5: when orders runs the CANARY strategy its route moves to a Traefik IngressRoute + weighted TraefikService (progressive-delivery.yaml); blue/green keeps the plain route below (the Rollouts controller flips the Service selector instead).
 */ -}}
@@ -59,28 +59,14 @@ spec:
                   number: {{ .Values.services.users.port }}
           {{- if .Values.frontend.enabled }}
           {{- /*
-          DEV-ONLY (frontend.enabled): the in-cluster debug SPA calls Inventory and Payments directly,
-          so we expose them here too. In prod these stay internal (no public route) — never enable the
-          hosted debug SPA there. The "/" catch-all serves the SPA for everything that isn't /api/*
-          (Traefik prefers the longer /api/<svc> prefixes, so API calls still reach the services).
+          PRODUCTION frontend (frontend.enabled): serve the SPA plus the public routes it needs — the secured
+          Notifications SSE stream and a NARROW inventory read. These do NOT open the internal services broadly:
+          notifications + inventory both validate the user's JWT, and only /api/inventory/availability is routed
+          (never the /api/inventory prefix or the /items debug reads; payments is never routed at all). The "/"
+          catch-all serves the SPA for everything that isn't /api/* — Traefik prefers the longer /api/<svc>
+          prefixes (and the canary /api/orders IngressRoute), so API calls still reach the services.
           */}}
-          # /api/inventory/** -> Inventory (debug SPA reads seat availability)
-          - path: /api/inventory
-            pathType: Prefix
-            backend:
-              service:
-                name: inventory
-                port:
-                  number: {{ .Values.services.inventory.port }}
-          # /api/payments/** -> Payments (debug SPA reads the authorization outcome)
-          - path: /api/payments
-            pathType: Prefix
-            backend:
-              service:
-                name: payments
-                port:
-                  number: {{ .Values.services.payments.port }}
-          # /api/notifications/** -> Notifications (debug SPA opens the SSE stream that pushes saga updates)
+          # /api/notifications/** -> Notifications (the secured SSE stream the SPA opens for live saga updates)
           - path: /api/notifications
             pathType: Prefix
             backend:
@@ -88,6 +74,38 @@ spec:
                 name: notifications
                 port:
                   number: {{ .Values.services.notifications.port }}
+          # /api/inventory/availability -> Inventory: ONLY the public seat-count read (paginated DTO). The broad
+          # /api/inventory prefix and the /items debug reads are NOT routed here — they stay internal in prod.
+          - path: /api/inventory/availability
+            pathType: Prefix
+            backend:
+              service:
+                name: inventory
+                port:
+                  number: {{ .Values.services.inventory.port }}
+          {{- if .Values.frontend.exposeInternalDebugRoutes }}
+          {{- /*
+          DEV-ONLY (frontend.exposeInternalDebugRoutes): the local debug SPA also reads the BROAD inventory
+          surface (/items) and payments directly. NEVER true in prod — Inventory and Payments stay internal
+          there (reached only via Kafka). values-kind.yaml flips this on; base/prod keeps it false.
+          */}}
+          # /api/inventory/** -> Inventory (debug: full seat counts + /items)
+          - path: /api/inventory
+            pathType: Prefix
+            backend:
+              service:
+                name: inventory
+                port:
+                  number: {{ .Values.services.inventory.port }}
+          # /api/payments/** -> Payments (debug: authorization outcome)
+          - path: /api/payments
+            pathType: Prefix
+            backend:
+              service:
+                name: payments
+                port:
+                  number: {{ .Values.services.payments.port }}
+          {{- end }}
           # everything else -> the static SPA (history-mode fallback handled by nginx)
           - path: /
             pathType: Prefix

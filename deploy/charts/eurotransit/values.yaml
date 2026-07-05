@@ -6,8 +6,9 @@ global:
   registry: labg03clusterregistry.azurecr.io
   # image path prefix: full image = <registry>/<imagePrefix>/<service>
   imagePrefix: eurotransit
-  # public host the Ingress serves (TLS cert is issued for this name)
-  domain: 158.158.71.17.sslip.io
+  # public host the Ingress serves (TLS cert issued for this name). Real subdomain: the wildcard
+  # *.g03.cpo2026.it resolves to the Traefik LB, and the Keycloak client redirect derives from this host.
+  domain: app.g03.cpo2026.it
   # cert-manager ClusterIssuer that signs the Ingress TLS cert (Secret eurotransit-tls).
   # Default = real Let's Encrypt (Argo CD / prod render base values.yaml only).
   # Local kind overrides this to "selfsigned" in values-kind.yaml (LE can't validate a laptop).
@@ -31,12 +32,16 @@ global:
     issuer: https://auth.g03.cpo2026.it/realms/eurotransit
     jwkSetUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/certs
     tokenUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/token
-# Debug SPA hosted IN-CLUSTER (nginx serving the Vite build). DEV/kind convenience so the app can be
-# exercised end-to-end without running services locally; the ingress (gated on the same flag) also adds
-# the SPA's "/" route plus the internal /api/inventory + /api/payments prefixes. OFF in base/prod: the
-# SPA is served elsewhere there and Inventory/Payments stay internal. values-kind.yaml flips this on.
+# The SPA storefront, hosted IN-CLUSTER (nginx serving the Vite build) as the PRODUCTION frontend. When
+# enabled, the ingress serves the SPA at "/" and adds ONLY the public routes it needs: the secured
+# notifications SSE stream and the narrow /api/inventory/availability read (Payments + the broad Inventory
+# surface stay internal). `exposeInternalDebugRoutes` is a SEPARATE dev-only switch that also opens the broad
+# /api/inventory + /api/payments prefixes for the local debug SPA — it MUST stay false here; values-kind.yaml
+# flips both on. image.tag is CI-bumped (build-frontend job) like the services.
 frontend:
-  enabled: false
+  enabled: true
+  # DEV-ONLY: also route the broad /api/inventory + /api/payments prefixes (debug SPA). Never true in prod.
+  exposeInternalDebugRoutes: false
   image:
     repository: labg03clusterregistry.azurecr.io/eurotransit/frontend
     tag: latest
