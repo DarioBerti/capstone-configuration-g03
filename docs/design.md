@@ -46,11 +46,18 @@ La CI **non tocca mai il cluster** (scrive solo il tag via PAT least-privilege).
 
 ## 4. Design per pilastro
 ### A. Distributed & async (Pilastro A)
-Money path = **saga orchestrata async**: `POST /api/orders` (202 Accepted, ack durevole) → orders emette il comando
-`reserve-seats` → inventory prenota (hold) e risponde `reservation-result` (via il **suo** outbox) → orders emette
-`authorize-payment` → payments autorizza e risponde `payment-result` → orders emette `confirm-seats` + `capture-payment`
-→ CONFIRMED. Compensazioni: `release-seats` / `cancel-authorization`. Stato reply-driven
-`PENDING→RESERVED→AUTHORIZED→CONFIRMED (+REJECTED)`; `OrderTimeoutSweeper` ri-guida gli ordini bloccati oltre la deadline.
+Money path = **booking a due fasi** guidato dall'utente, poi **saga orchestrata async command/reply** (orders =
+coordinatore, nessuna chiamata HTTP sul money path). Fase sincrona: `POST /api/orders` crea un ordine **DRAFT**;
+`POST /{id}/legs` aggiunge la tratta outbound (obbligatoria) + eventuale return — ogni add **prenota i posti on-add**
+e la prima apre la **finestra di hold** backend-authoritative (`expiresAt`); `POST /{id}/pay` (202) autorizza entro
+la finestra. Da lì è **reply-driven**: `reserve-seats`→`reservation-result` (per tratta, con `tripCode`),
+`authorize-payment`→`payment-result`, fan-out `confirm-seats` su ogni tratta prenotata→`seats-confirmed` (fan-in),
+`capture-payment` **una sola volta** quando nessuna tratta resta prenotata→`payment-captured`→CONFIRMED. **Nessun
+trigger `order-placed`**: la saga parte dall'add-leg/pay sincroni. Stati ordine `DRAFT→HELD→PAYING→AUTHORIZED→CONFIRMED
+(+REJECTED)`; compensazioni `release-seats` / `cancel-authorization`. Due sweeper `@Scheduled`: `OrderTimeoutSweeper`
+ri-guida gli ordini bloccati in PAYING/AUTHORIZED, `CheckoutExpirySweeper` scade la finestra (`EXPIRED_NO_PAYMENT`
+vs `SERVICE_UNAVAILABLE`). PSP dietro `PaymentGateway` (`payments.provider = mock|paypal`, PayPal Orders v2 sandbox);
+SSE via snapshot sul topic `order-status-changed` → notifications. Dettaglio completo del money path nel README app.
 **Outbox→Kafka via Debezium CDC**: ogni servizio ha una tabella outbox; Debezium (Strimzi **Kafka Connect a 2 repliche**,
 un connector per servizio) legge il WAL (CNPG `wal_level=logical` + role di replication) e pubblica sui topic. **DLT per
 servizio** + retry bounded. Recoverability: un servizio che crasha riprende leggendo i topic (at-least-once + handler

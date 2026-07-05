@@ -7,7 +7,7 @@ type: application       # "application" (deployable) vs "library" (shared helper
 version: 0.1.0          # Chart version: bump when the templates change (independent of the app version)
 appVersion: "0.1.0"     # Version of the application being deployed (informational; quoted as recommended)
 
-# NOTE (deliberate deviation from Lab04): we do NOT vendor the CloudNativePG "cluster" subchart here. The CloudNativePG operator is installed once per cluster as a platform component; each service's database is declared directly as a "Cluster" CR in templates/databases.yaml
+# NOTE (deliberate deviation): we do NOT vendor the CloudNativePG "cluster" subchart here. The CloudNativePG operator is installed once per cluster as a platform component; each service's database is declared directly as a "Cluster" CR in templates/databases.yaml
 
 # Reason: we need several independent databases (one per data-owning service) and per-service Cluster CRs are clearer and easier to reason about than three aliased subchart instances. Strimzi/Kafka is likewise platform-level
 

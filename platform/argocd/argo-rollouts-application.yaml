@@ -19,7 +19,7 @@ spec:
     helm:
       valuesObject:
         controller:
-          # 1 replica (chart default 2 is leader-elected HA): on the 3x B2s_v2 lab cluster we book the
+          # 1 replica (chart default 2 is leader-elected HA): on the 3x B2s_v2 pool we book the
           # CPU for the money path instead — a controller restart just resumes the Rollout state machine,
           # in-flight rollouts keep their step/weights (state lives in the Rollout CR, not the pod).
           replicas: 1

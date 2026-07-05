@@ -21,7 +21,7 @@ che funzionino col codice** sul cluster reale. Nessuna modifica di codice in §6
 ## Finding §6.3 — topology spread soft (scelta team)
 `whenUnsatisfiable: ScheduleAnyway` rende lo spread una **preferenza**, non una garanzia → su questo run lo scheduler
 ha co-locato entrambe le repliche `payments` sullo stesso nodo. Un guasto di quel nodo perderebbe tutta la capacità
-payments (deck 11: *"replication protects only if replicas are across independent failure domains"*).
+payments (*"replication protects only if replicas are across independent failure domains"*).
 **Opzione:** `DoNotSchedule` (hard) garantirebbe nodi distinti, ma su 3 nodi rischia pod non-schedulabili durante un
 drain/upgrade. **Trade-off availability vs hard-spread → decisione del team** (annotare in `docs/design.md`). Non
 modificato dall'agente. Tracciato in `agent-log.md #16`.
