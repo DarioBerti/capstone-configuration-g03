@@ -28,7 +28,7 @@ breaker/relay; 1–5 are the capstone minimum, 6–8 cover what the async archit
 3. `03-node-disruption.md` — PDBs + topology spread keep the money path available.
 4. `04-kafka-partition.md` — **the central one**: a Kafka outage delays the saga, never corrupts it.
 5. `05-pg-failover.md` — RPO=0 **and the Debezium CDC resumes** (slot vs failover).
-6. `06-connect-worker-kill.md` — the CDC (now the only outbox→Kafka path) is HA across 3 workers.
+6. `06-connect-worker-kill.md` — the CDC (now the only outbox→Kafka path) is HA across 2 workers.
 7. `07-canary-auto-abort.md` — chaos on the canary → Argo Rollouts aborts on the SLO gates (Fase 5 ✕ 6).
 8. `08-poison-message-dlt.md` — bounded retry → per-service DLT; the partition is never head-of-line blocked.
 

@@ -10,7 +10,7 @@
      orders/inventory/payments Ready (note: orders is an **Argo Rollout** since Fase 5 — its PDB selects
      pods by the same stable labels, so the budget governs Rollout-managed pods identically);
   2. the *stateful* citizens on the drained node also ride it out: a Kafka broker (RF=3/minISR=2), a Kafka
-     Connect worker (3 replicas — the connector task rebalances, see experiment 06), or a CNPG standby
+     Connect worker (2 replicas — the connector task rebalances, see experiment 06), or a CNPG standby
      (the primary is protected by CNPG's own eviction handling; a primary drain triggers a switchover);
   3. checkout stays within SLO during the disruption.
 - **Blast radius / one variable:** one node drained (voluntary) or killed (involuntary).
