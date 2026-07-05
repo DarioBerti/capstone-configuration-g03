@@ -55,11 +55,17 @@ spec:
       priorityClassName: eurotransit-critical
       affinity:
         podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchLabels:
-                  strimzi.io/name: eurotransit-kafka
-              topologyKey: kubernetes.io/hostname
+          # SOFT (preferred) spread: strongly prefer 1 broker/node but never leave a broker Pending. On this
+          # memory-tight 3-node pool a HARD (required) rule left the 3rd broker unschedulable (no node had room
+          # for a 768Mi broker after the other two were placed). Soft still moved us off the all-3-on-one-node
+          # SPOF; full 1-per-node needs ~768Mi freed on the tightest node (see the catalog/users right-size option).
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    strimzi.io/name: eurotransit-kafka
+                topologyKey: kubernetes.io/hostname
 ---
 # The Kafka cluster itself (brokers are provided by the node pool above)
 apiVersion: kafka.strimzi.io/v1
