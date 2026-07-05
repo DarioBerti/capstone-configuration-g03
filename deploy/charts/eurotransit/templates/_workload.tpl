@@ -96,6 +96,9 @@ spec:
       labels:
         {{- include "eurotransit.labels" (dict "svc" .name "root" .root) | nindent 8 }}
     spec:
+      # PriorityClass (deterministic node-pressure eviction, Pillar C): the money path is evicted LAST; other
+      # app services before it; untagged observability (priority 0) first of all. See platform/priorityclasses.yaml.
+      priorityClassName: {{ if .svc.criticalPath }}eurotransit-critical{{ else }}eurotransit-platform{{ end }}
       # SIGTERM drain window (Pillar A): readiness refuses traffic, in-flight work finishes within this budget
       terminationGracePeriodSeconds: 30
       {{- if .svc.db }}
@@ -273,7 +276,12 @@ spec:
             periodSeconds: 5
             failureThreshold: 24
           resources:
+            {{- /* money path -> criticalResources (higher request covering the peak); rest -> the light default */}}
+            {{- if .svc.criticalPath }}
+            {{- toYaml .root.Values.criticalResources | nindent 12 }}
+            {{- else }}
             {{- toYaml .root.Values.resources | nindent 12 }}
+            {{- end }}
 ---
 # stable in-cluster address: other pods reach it as http://<name>:<port>
 apiVersion: v1
