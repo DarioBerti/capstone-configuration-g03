@@ -21,7 +21,7 @@ WAL — the slot alerts are the proof hook for chaos exp 05).
 ## Pieces
 
 - `Dockerfile` — Strimzi Connect base + the Debezium Postgres plugin. Build + push before deploying.
-- `kafka-connect.yaml` — the Connect cluster (PROD/HA, 3 replicas). `kind/kafka-connect-kind.yaml` is the laptop variant.
+- `kafka-connect.yaml` — the Connect cluster (PROD/HA, 2 replicas). `kind/kafka-connect-kind.yaml` is the laptop variant.
 - `connectors/*.yaml` — one `KafkaConnector` per DB (shared by prod and kind).
 - The **source side** (publication, grants, heartbeat table, `wal_level=logical`, the `debezium` role) is
   provisioned in the OTHER repo: Flyway migrations (`V*__debezium_publication.sql`) + CloudNativePG

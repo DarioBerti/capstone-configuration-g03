@@ -17,7 +17,7 @@ Legenda: ✅ fatto · 🔄 in corso · ⬜ da fare
  Fase 0  Fondamenta             ✅
  Fase 1  Core money path        ✅   ← 6 servizi; saga ora ASYNC Kafka command/reply + outbox
  Fase 2  Resilienza             🔄   ← edge @RateLimiter (429) + DLT/retry async OK; breaker/bulkhead da ri-collocare
- Fase 3  Piattaforma su cluster ✅   ← verificata su AKS; + Debezium (Kafka Connect 3 repliche, CNPG logical)
+ Fase 3  Piattaforma su cluster ✅   ← verificata su AKS; + Debezium (Kafka Connect 2 repliche, CNPG logical)
  Fase 4  Observability          ✅   ← VALIDATA LIVE su AKS 03/07: lag+CDC+DLT+SLI saga+tracing cross-Kafka E2E
  Fase 5  Progressive delivery   ✅   ← Argo Rollouts VALIDATO su AKS 03/07: ramp 3 gate×19 ok + abort automatico
  Fase 6  Chaos + postmortem     🔄   ← 8 runbook async PRONTI; resta: Chaos Mesh su AKS + sessione live + demo
@@ -52,7 +52,7 @@ Col cutover async, il breaker/bulkhead/retry **sincroni** sono stati **ritirati*
 ## Fase 3 — Piattaforma sul cluster reale ✅ (verificata su AKS)
 - ✅ Traefik, cert-manager, **CloudNativePG** (sync replication inventory/orders → RPO=0), **Strimzi/Kafka**,
   Sealed Secrets, Argo CD **Synced&Healthy** (drift self-heal + prune dimostrati), TLS Let's Encrypt prod.
-- ✅ **Debezium CDC** (async rework): Strimzi **Kafka Connect (3 repliche, HA)** + connector per servizio (Argo-managed) +
+- ✅ **Debezium CDC** (async rework): Strimzi **Kafka Connect (2 repliche, HA)** + connector per servizio (Argo-managed) +
   CNPG in **logical replication** (`wal_level=logical` + role di replication). Sostituisce il relay a polling.
 - ✅ CI → bump `image.tag` su config (mai credenziali cluster). Money-path verificato `→ CONFIRMED`.
 - ✅ **DECISO (03/07): restiamo su PG16, niente failover-slots.** Lo slot logico muore col primary; il money
