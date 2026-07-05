@@ -43,6 +43,19 @@ spec:
     type: persistent-claim
     size: 5Gi
     deleteClaim: false
+  # HA: spread the 3 brokers ONE-PER-NODE. Without this the scheduler co-located all 3 on a single node (seen
+  # live 05/07) -> a single node loss takes out the whole KRaft quorum = Kafka down = money path down (would fail
+  # chaos-03 node-disruption). requiredDuringScheduling makes 1-broker-per-node a hard guarantee across the 3-node
+  # pool; it also rebalances memory off the previously overloaded node. (Losing a broker still keeps 2/3 = quorum.)
+  template:
+    pod:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  strimzi.io/name: eurotransit-kafka
+              topologyKey: kubernetes.io/hostname
 ---
 # The Kafka cluster itself (brokers are provided by the node pool above)
 apiVersion: kafka.strimzi.io/v1
