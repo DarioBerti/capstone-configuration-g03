@@ -20,12 +20,15 @@ RG=lab02_g03_group                       # resource group Azure
 CLUSTER=lab_g03_cluster                  # nome del cluster AKS
 
 # ── gli ingressi pubblici del sistema ────────────────────────────────────────
-APP=https://158.158.71.17.sslip.io       # l'app (Traefik + TLS Let's Encrypt)
+APP=https://app.g03.cpo2026.it           # app/storefront (Traefik + TLS). NB: host CAMBIATO — il vecchio 158.158.71.17.sslip.io ora dà 404
 KC=https://auth.g03.cpo2026.it           # Keycloak (login/token)
 
-# ── utente demo (esiste già nel realm) ───────────────────────────────────────
-DEMO_USER=smoketest
-DEMO_PW=smoketest-pw-2026
+# ── utente demo ──────────────────────────────────────────────────────────────
+# Su AKS l'unico utente seeded è admin/admin: il re-import del realm al (ri)avvio RIPULISCE `smoketest`
+# (che esiste SOLO su kind → "ieri sì, oggi no"). Richiede Direct Access Grants ON sul client
+# `eurotransit-frontend` (§3) per il password-grant; RISPEGNILO a fine sessione (§9).
+DEMO_USER=admin
+DEMO_PW=admin
 TRIP=FR9592-20260629                     # tripCode di esempio (se SOLD_OUT va bene lo stesso: è un esito corretto)
 ```
 

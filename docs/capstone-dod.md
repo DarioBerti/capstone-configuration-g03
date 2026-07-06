@@ -13,9 +13,9 @@ Team-authored DoD. Each item is short, operational, and checkable. Status: ☐ t
 > team decision: whether the retired breaker is acceptable for the rubric or reinstated on a remaining sync hop.
 >
 > Update (2026-07-06): close-out progress on the live AKS cluster. Full money path re-verified end-to-end
-> (booking DRAFT→HELD→PAYING→AUTHORIZED→**CONFIRMED**, never-oversell + no-double-charge held). **Chaos: 7 of 8
-> experiments executed and all PASS** (01–06, 08), each adapted to the constrained-pool config; **07
-> (canary auto-abort) remains — it runs during a live rollout**, alongside the still-open progressive-delivery
+> (booking DRAFT→HELD→PAYING→AUTHORIZED→**CONFIRMED**, never-oversell + no-double-charge held). **Chaos: ALL 8
+> experiments executed and all PASS** (01–08), each adapted to the constrained-pool config; **07
+> (canary auto-abort) PASS 2026-07-06 (true-positive — the analysis gate aborted a bad canary)**, alongside the still-open progressive-delivery
 > (canary/blue-green) demo, the graceful-degradation test, and the recorded demo (Phase 5/6). Cluster tuning
 > (PriorityClasses + tiered right-sizing) applied and documented in the config README §6.
 
@@ -73,9 +73,9 @@ Team-authored DoD. Each item is short, operational, and checkable. Status: ☐ t
 
 ## Chaos experiments
 - ☑ Experiments run as hypotheses (steady state → hypothesis → one failure → observe → conclude), each with a
-  report in `docs/chaos/`. **7 of 8 executed and PASS on AKS (2026-07-06)** — 01–06 + 08, well past the capstone
-  minimum of five; **07 (canary auto-abort) runs during a live rollout** (Phase 5/6). *(in-process precursors
-  tagged — see docs/chaos/test-traceability.md)*
+  report in `docs/chaos/`. **All 8 executed and PASS on AKS (2026-07-06)** — 01–08, well past the capstone
+  minimum of five; **07 (canary auto-abort) proven true-positive** during a live canary ramp (Phase 5/6). *(in-process
+  precursors tagged — see docs/chaos/test-traceability.md)*
 
 ## Agentic coding
 - ☑ Judgments (decomposition, consistency model, SLOs, failure-mode map, chaos hypotheses,
@@ -85,7 +85,7 @@ Team-authored DoD. Each item is short, operational, and checkable. Status: ☐ t
 
 ## Deliverables
 - ☑ Two repos with history showing GitOps-driven delivery. *(app + config; CI→ACR→tag-bump→Argo CD)*
-- ☐ `docs/` complete (DoD, design/consistency, SLOs, chaos reports, postmortem, threat-model,
-  agent-log). *(DoD / design / SLO (docs/slo.md) / threat-model / agent-log / version-compatibility done; chaos reports 7/8 filled with live results — 07 pending a live rollout; **postmortem still to fill** → then this flips to ☑)*
+- ☑ `docs/` complete (DoD, design/consistency, SLOs, chaos reports, postmortem, threat-model,
+  agent-log). *(all present & current: DoD / design / SLO (docs/slo.md) / threat-model / agent-log / version-compatibility / NOTES; **all 8 chaos reports (01–08) filled with live results**; **postmortem filled** — 03/07 false-positive + 06/07 true-positive)*
 - ☐ ~5-min recorded demo (link committed) showing running system, dashboards answering
   operational questions, a canary, a blue/green, and an alert firing under injected failure. *(Phase 6)*
