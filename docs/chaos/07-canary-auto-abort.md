@@ -65,4 +65,3 @@ gate never tripped, and the canary **auto-promoted twice** before we caught it. 
   `ProgressDeadlineExceeded` **before** the p99 gate (wrong mechanism to show). 400 ms blows the 300 ms
   intake-ack p99 gate while the readiness DB check stays under its 1 s timeout — so the **analysis gate** is
   the trigger, as intended.
-</content>

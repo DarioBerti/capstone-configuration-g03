@@ -164,4 +164,3 @@ With the async cutover, the **synchronous** breaker/bulkhead/retry were **retire
 ```
 > Golden rule: **nobody changes the cluster by hand** — change Git, Argo reconciles. Every non-obvious choice
 > goes into `docs/` or a README (that is where the grade is won).
-</content>

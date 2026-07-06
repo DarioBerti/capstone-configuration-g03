@@ -99,4 +99,3 @@ Built + pushed by the app-repo CI (`build-frontend`, bakes `VITE_KEYCLOAK_URL`);
 - ⚠️ **Pin the unpinned platform components in Git** (Chaos Mesh 2.8.3, cert-manager, Argo CD,
   kube-prometheus-stack, Tempo, Sealed Secrets, Keycloak, Traefik chart) — the platform rule is "never
   `latest`", and several are currently installed by hand without a Git-recorded version.
-</content>

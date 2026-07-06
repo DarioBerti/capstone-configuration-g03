@@ -1,32 +1,44 @@
 # Agent threat model — the coding agent as a non-human actor
 
-> Required by the capstone: reason about the agent's blast radius inside our delivery loop.
+> Required by the capstone: reason about the blast radius of a coding agent inside our delivery loop.
 
-**Where the agent sits.** A coding agent can author code and manifests and open pull requests
-against **both** repositories. The configuration repository is reconciled by Argo CD, so any
-change merged there is, within the sync interval, applied to the cluster. That places the agent
-**inside the control loop**: a bad merged change is a bad deployment.
+## Where the agent sits
 
-**Credentials / least privilege.**
-- The agent operates only through Git (proposing branches / PRs). It holds **no** cluster
-  credentials and **no** kubeconfig — same principle as CI.
-- It does **not** hold the registry push credentials (`ACR_*`) or the `CONFIG_REPO_PAT`; those
-  live only in GitHub Actions secrets, used by CI after a human-reviewed merge.
-- It cannot push to `main` directly; branch protection requires review.
+A coding agent can write code and manifests and open pull requests against **both** repos. The configuration
+repo is reconciled by Argo CD, so anything merged there reaches the cluster within one sync interval. That puts
+the agent **inside the control loop**: a bad *merged* change is a bad *deployment*.
 
-**Review gates (human + policy-as-code).**
-- Every agent PR requires human review before merge (branch protection on `main` in both repos).
-- Policy-as-code in CI on the configuration repo: `helm lint` + `kubeconform`/OPA checks reject
-  privileged pods, `:latest` on the critical path, missing probes/PDBs, or plaintext Secrets
-  (only SealedSecrets allowed). These run on the PR, before merge.
+## What the agent can and cannot do (least privilege)
 
-**Worst case if it proposes a bad change.**
-- A subtly wrong manifest (e.g. liveness probing a downstream, an over-permissive
-  ServiceAccount, a non-idempotent handler, dropping `min.insync.replicas`) could degrade or
-  outage the critical path after merge.
-- Containment: review + policy checks catch the common classes pre-merge; Argo CD history +
-  `git revert` give a fast rollback; PDBs/topology spread/HPA limit blast radius; SLO burn-rate
-  alerts surface user-visible impact quickly. The agent never has a direct write path to the
-  cluster, so the *only* way its change ships is through a gate we control.
+| The agent has | The agent does NOT have |
+|---|---|
+| the ability to propose branches / PRs (Git only) | any cluster credentials or kubeconfig |
+| read access to both repos | registry push creds (`ACR_*`) or the `CONFIG_REPO_PAT` |
+| — | write access to `main` (branch protection blocks direct pushes) |
 
-See `agent-log.md` for concrete mistakes already caught.
+Same principle as CI: the agent influences the cluster **only** through Git, and only after a gate we control.
+The push credentials and the PAT live solely in GitHub Actions secrets, used *after* a human-reviewed merge.
+
+## The gates before any agent change ships
+
+1. **Human review** — branch protection on `main` in both repos; no PR merges without it.
+2. **Policy-as-code in CI** (config repo) — `helm lint` + `kubeconform`/OPA reject privileged pods, `:latest` on
+   the critical path, missing probes/PDBs, or plaintext Secrets (only SealedSecrets allowed). These run on the
+   PR, before merge.
+
+## Worst case, and why it's contained
+
+**Worst case:** a subtly wrong change slips through — e.g. a liveness probe that checks a downstream, an
+over-permissive ServiceAccount, a non-idempotent handler, or dropping `min.insync.replicas` — and degrades the
+critical path after merge.
+
+**Why it's contained:**
+- review + policy checks catch the common classes *before* merge;
+- Argo CD history + `git revert` give a fast rollback;
+- PDBs, topology spread, and HPA limit the blast radius;
+- SLO burn-rate alerts surface user-visible impact quickly.
+
+The agent never has a direct write path to the cluster, so the *only* way its change ships is through a gate we
+control.
+
+See `agent-log.md` for concrete mistakes we actually caught.
