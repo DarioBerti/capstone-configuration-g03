@@ -208,7 +208,7 @@ services:
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: 4407f01
+      tag: db3e668
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
