@@ -77,10 +77,35 @@ wolf" failure mode for automated rollbacks).
 |---|---|---|
 | NaN-proof **every** canary `successCondition` (`isNaN(result[0]) \|\| <slo test>`) so a `0/0` window counts as "no evidence of failure", not "failure" | Mattia | **Done** (2026-07-03 — commit `fix(fase5): NaN-proof the canary analysis gates`) |
 | Make the smoke-test token outlive the ramp (or exclude `uri="UNKNOWN"` / 401 from the intake SLI) so canary traffic can't manufacture a `0/0` window | Emanuele | Open |
-| Prove the **true-positive** path too: run chaos exp. 07 (inject latency into ONLY the canary during a live ramp) and confirm the gate aborts a genuinely bad deploy | Mattia | Open (needs a rollout in flight → runs with the demo) |
+| Prove the **true-positive** path too: run chaos exp. 07 (inject latency into ONLY the canary during a live ramp) and confirm the gate aborts a genuinely bad deploy | Mattia | **Done** (2026-07-06 — live on AKS; the canary ack-p99 gate aborted a genuinely bad canary, stable untouched. See `docs/chaos/07-canary-auto-abort.md` and the follow-up below) |
+| Harden the chaos-07 injection: a NetworkChaos `target` by the orders-db pod label doesn't intercept ClusterIP-routed DB traffic → delay all canary egress instead, and retune the latency under the 1 s readiness timeout | Mattia | **Done** (2026-07-06 — `platform/chaos-mesh/07-canary-auto-abort.yaml`) |
 | Add "the two no-data shapes" (empty vector vs `NaN`) to the release-gate review checklist | Team | Open |
+
+## Follow-up (2026-07-06): the true-positive path, proven live
+
+The 03/07 incident above was a **false** abort. On 2026-07-06 we closed the loop by proving the **true**
+abort — chaos experiment 07, live on AKS (full write-up: `docs/chaos/07-canary-auto-abort.md`).
+
+- **What we did.** During a real `orders` canary ramp (canary at 25%, under ~4 req/s of intake), we injected
+  network latency into **only** the canary pods. The canary's `POST /api/orders` p99 blew the 300 ms analysis
+  gate; after `failed (4) > failureLimit (3)` (~90 s) the controller **aborted autonomously** → rollout
+  `Degraded (RolloutAborted)`, TraefikService weights `25/75 → 100/0`, canary drained, **stable served 201 in
+  0.21 s throughout** — zero human actions, no page.
+- **Crucially, only the injected signal failed.** `intake-success-rate` stayed 1.0 and `consumer-failures`
+  stayed 0 — the opposite of the 03/07 false positive, where a *lying* success-rate signal (`0/0 = NaN`)
+  caused the abort. Together the two incidents show both halves: the gate aborts a genuinely bad release, and
+  (post NaN-fix) no longer aborts a healthy one.
+- **New lesson (the experiment itself had a latent defect).** The chaos manifest originally delayed
+  `canary → orders-db` scoped by the DB **pod label**; on AKS the app reaches the DB via the `orders-db-rw`
+  **ClusterIP**, so the netem rule (pod-IP match) intercepted nothing — the delay was a no-op, the p99 never
+  moved, and the canary **auto-promoted twice** before we noticed. Fix: delay **all** canary egress (no
+  destination to match) and retune the latency (1200 ms → 400 ms) to stay under the 1 s readiness-probe
+  timeout, so the **analysis gate** (not `ProgressDeadlineExceeded`) is the trigger. *Lesson: "the chaos
+  injected successfully" (`AllInjected=True`) is not "the chaos had an effect" — verify the target metric
+  actually moved.* Recorded in the agent-log.
 
 ---
 _Blameless close: our automation prevented a bad outcome and behaved exactly as designed. The work
 is to harden the **signal** so it stops firing on non-failures — not to distrust the mechanism that
-kept users safe._
+kept users safe. The 2026-07-06 follow-up adds the missing half: the same gate, proven to abort a genuinely
+bad release — again with no human in the loop._

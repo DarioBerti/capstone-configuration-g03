@@ -11,9 +11,9 @@ repo READMEs; the graded record of caught agent mistakes is in `docs/agent-log.m
 > **Constrained-cluster tuning done this session:** PriorityClasses (deterministic node-pressure eviction),
 > two-tier right-sizing, `orders` HPA 4→3, and the Kafka all-on-one-node HA caveat (see the config README §6).
 > Decisions: **D9 = Argo Rollouts**, **PG17 failover-slots = NO** (best-effort notification loss accepted).
-> **Chaos (Phase 6): 7 of 8 experiments executed LIVE on AKS (2026-07-06) — all PASS** (01–06, 08), each adapted
-> to the constrained-pool config. **Remaining:** 07 (canary auto-abort, run during a live rollout) + the blameless
-> postmortem + the ~5-min recorded demo.
+> **Chaos (Phase 6): ALL 8 experiments executed LIVE on AKS (2026-07-06) — all PASS** (01–08), each adapted to
+> the constrained-pool config; **07 (canary auto-abort) proven true-positive** — latency on ONLY the canary blew
+> the analysis gate → Argo Rollouts aborted autonomously, stable untouched. **Remaining:** only the ~5-min demo.
 > The AKS cluster is **stopped** except during sessions (always `az aks stop` at the end — student subscription).
 
 Legend: ✅ done · 🔄 in progress · ⬜ to do
@@ -25,7 +25,7 @@ Legend: ✅ done · 🔄 in progress · ⬜ to do
  Phase 3  Platform on real cluster  ✅   ← verified on AKS; + Debezium (Kafka Connect 2 replicas, CNPG logical)
  Phase 4  Observability             ✅   ← validated LIVE on AKS: lag + CDC + DLT + saga SLI + cross-Kafka tracing E2E
  Phase 5  Progressive delivery      ✅   ← Argo Rollouts validated on AKS: 3-gate ramp + automatic abort
- Phase 6  Chaos + postmortem + demo 🔄   ← 7/8 chaos PASS live on AKS (06/07); remaining: 07 canary + postmortem + demo
+ Phase 6  Chaos + postmortem + demo 🔄   ← 8/8 chaos PASS live on AKS (06/07) + postmortem done; remaining: recorded demo
 ```
 
 ## Division of labour
@@ -115,7 +115,7 @@ With the async cutover, the **synchronous** breaker/bulkhead/retry were **retire
 - ✅ **Release rule (async)**: canary/preview **share the consumer group** → the weight governs only HTTP intake;
   the invariant is command/reply schema compatibility between adjacent versions.
 
-## Phase 6 — Chaos + postmortem + demo 🔄 (7/8 chaos executed & PASS — 07 + postmortem + demo remain)
+## Phase 6 — Chaos + postmortem + demo 🔄 (all 8 chaos PASS + postmortem done — recorded demo remains)
 - ✅ **Runbooks rewritten for async** — **8 experiments** (`docs/chaos/`, manifests in `platform/chaos-mesh/`):
   01 payments-latency (a slow consumer = lag + sweeper, not errors — the breaker's replacement under test);
   02 pod-kill inventory (never-oversell under redelivery); 03 node disruption (kill a node NOT holding the Kafka
@@ -123,13 +123,16 @@ With the async cutover, the **synchronous** breaker/bulkhead/retry were **retire
   corruption); 05 CNPG failover (RPO=0 + CDC resumes; PG16 self-healing posture); 06 kill a Kafka Connect worker
   (CDC HA); 07 chaos on the canary → Rollouts auto-abort (links Phase 5 + 6); 08 poison message → DLT (the core
   Pillar-C claim, proven).
-- ✅ **Live execution on AKS (2026-07-06): 7 of 8 run and PASS** (01–06, 08). Each ran one at a time under k6
+- ✅ **Live execution on AKS (2026-07-06): all 8 run and PASS** (01–08). Each ran one at a time under k6
   load (see `docs/chaos/README.md`), was adapted to the constrained-pool config (2-instance CNPG, 2-replica
   Debezium, Kafka co-located), and its report's Observation/verdict is filled with the live results.
-- ⬜ **07 (canary auto-abort)** remains — it needs a rollout in flight, so it runs together with the
-  progressive-delivery demo (there is already a paused canary on `orders` to drive).
-- ⬜ **Blameless postmortem** (candidate: #07 as a "bad deploy") + a **recorded ~5-min demo** (live system,
-  dashboards, canary auto-abort, one alert).
+- ✅ **07 (canary auto-abort) — PASS (2026-07-06)** during a live `orders` canary ramp: latency injected on
+  ONLY the canary → its intake p99 blew the 300 ms analysis gate → Argo Rollouts aborted autonomously (weights
+  25/75→100/0), stable never touched, money path kept confirming. It also surfaced a chaos-manifest defect
+  (netem target-by-pod-label misses ClusterIP-routed DB traffic → switched to delay-all-egress, latency
+  retuned under the 1 s readiness timeout). See `docs/chaos/07-canary-auto-abort.md`.
+- ✅ **Blameless postmortem** filled (`docs/postmortem.md`): the 03/07 false-positive + the 06/07 true-positive
+  follow-up. ⬜ **Remaining: the recorded ~5-min demo** (live system, dashboards, canary auto-abort, one alert).
 
 ---
 
