@@ -167,10 +167,24 @@ spec:
             - name: KAFKA_BOOTSTRAP
               value: {{ .root.Values.global.kafkaBootstrap | quote }}
             {{- end }}
-            {{- /* service-specific env (e.g. Orders' sibling base URLs) */}}
+            {{- /* service-specific env */}}
             {{- range $envName, $envValue := (dig "extraEnv" (dict) .svc) }}
             - name: {{ $envName }}
               value: {{ $envValue | quote }}
+            {{- end }}
+            {{- /* Catalog signs browse-time price quotes: inject the EC PRIVATE key from the price-quote-signing
+                   Secret (SealedSecret in prod / priceQuote.devSecrets plaintext on kind). */}}
+            {{- if dig "signsPriceQuotes" false .svc }}
+            - name: PRICE_QUOTE_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: price-quote-signing
+                  key: signing-key
+            {{- end }}
+            {{- /* Orders verifies those quotes locally with the non-secret EC PUBLIC key (no call to Catalog). */}}
+            {{- if dig "verifiesPriceQuotes" false .svc }}
+            - name: PRICE_QUOTE_PUBLIC_KEY
+              value: {{ .root.Values.global.pricing.publicKey | quote }}
             {{- end }}
             {{- if .svc.secured }}
             {{- /* OAuth2 resource server: validate Keycloak JWTs */}}

@@ -32,6 +32,13 @@ global:
     issuer: https://auth.g03.cpo2026.it/realms/eurotransit
     jwkSetUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/certs
     tokenUri: https://auth.g03.cpo2026.it/realms/eurotransit/protocol/openid-connect/token
+  # Price-quote signing keypair. Catalog SIGNS browse-time price quotes with the private half; Orders VERIFIES
+  # them with this PUBLIC half (injected as PRICE_QUOTE_PUBLIC_KEY) — so Catalog stays off the money path. The
+  # public key is non-secret; the matching PRIVATE key reaches catalog via the `price-quote-signing` Secret
+  # (SealedSecret in prod / priceQuote.devSecrets plaintext on kind). This is the DEV keypair's public half;
+  # replace BOTH halves together for a real deployment (keep them a matching pair or every add-leg 400s).
+  pricing:
+    publicKey: '{"kty":"EC","crv":"P-256","kid":"price-quote-dev","x":"88QMkhVI-Xygzue616voDrIHFU9DZrxo91Np99RGL8I","y":"yE9kgtizYUeBDJCYNttyrHhAi5zWukU85bIHKr4CIc0","alg":"ES256"}'
 # The SPA storefront, hosted IN-CLUSTER (nginx serving the Vite build) as the PRODUCTION frontend. When
 # enabled, the ingress serves the SPA at "/" and adds ONLY the public routes it needs: the secured
 # notifications SSE stream and the narrow /api/inventory/availability read (Payments + the broad Inventory
@@ -114,6 +121,9 @@ services:
     db: catalog-db
     # OAuth2 resource server -> inject the OIDC env (global.oidc) so it validates Keycloak JWTs
     secured: true
+    # Signs browse-time price quotes: inject the EC PRIVATE key PRICE_QUOTE_SIGNING_KEY from the
+    # `price-quote-signing` Secret (SealedSecret in prod; priceQuote.devSecrets plaintext on kind).
+    signsPriceQuotes: true
     # NOT on the money path -> no PDB, no topology spread, looser SLOs
     criticalPath: false
     # does not produce/consume Kafka events -> no KAFKA_BOOTSTRAP injected
@@ -138,10 +148,14 @@ services:
     usesKafka: true
     # validates inbound user JWTs (resource server)
     secured: true
+    # Orders prices a leg from Catalog's signed browse-time quote, VERIFIED LOCALLY with the EC PUBLIC key — no
+    # sync call to Catalog on the money path. Injects PRICE_QUOTE_PUBLIC_KEY (non-secret) from global.pricing.publicKey;
+    # Orders never holds the private key (least privilege).
+    verifiesPriceQuotes: true
     # NB (async saga): Orders makes NO sync calls to Inventory/Payments — it emits Kafka commands and reacts to
-    # replies. So it needs no sibling base-URLs and no service-token client: the former oidcClient (orders-svc /
-    # orders-oidc) and extraEnv (INVENTORY/PAYMENTS_BASE_URL) were removed with the sync→async cutover. It stays a
-    # resource server (secured) only to validate the inbound user JWT on POST /api/orders.
+    # replies, so it needs no sibling base-URLs and no service-token client: the former oidcClient (orders-svc /
+    # orders-oidc) and the INVENTORY/PAYMENTS_BASE_URL env were removed with the sync→async cutover. It stays a
+    # resource server (secured) to validate the inbound user JWT on POST /api/orders.
     # Public sync entry of the money path: scale out under load instead of queueing to collapse (works together with load shedding / 429, Pillar C)
     # maxReplicas capped 4->3 (05/07): on the memory-tight pool a cold-start CPU spike ballooned orders to 4 pods
     # (~4x448Mi) with no lasting need (idle CPU ~39%); 3 keeps burst headroom while bounding the memory footprint.
@@ -304,6 +318,15 @@ paypal:
       number: ""
       expiry: "" # YYYY-MM
       cvv: ""
+# Price-quote signing key (the PRIVATE half of global.pricing) for Catalog, consumed as PRICE_QUOTE_SIGNING_KEY.
+# In prod the `price-quote-signing` secret is committed as a SealedSecret and devSecrets stays false. On kind,
+# values-kind.yaml flips devSecrets=true so templates/price-quote-secret.yaml renders the plaintext DEV private
+# key below (which matches global.pricing.publicKey), letting the flow work without kubeseal.
+priceQuote:
+  devSecrets: false
+  dev:
+    # DEV-ONLY private JWK; matches the DEV public half in global.pricing.publicKey. Replace both together for prod.
+    signingKey: '{"kty":"EC","d":"rRtoahvH5qqlroH0kU8YDvN05zDvvbP8rREjzUejhkc","crv":"P-256","kid":"price-quote-dev","x":"88QMkhVI-Xygzue616voDrIHFU9DZrxo91Np99RGL8I","y":"yE9kgtizYUeBDJCYNttyrHhAi5zWukU85bIHKr4CIc0","alg":"ES256"}'
 # NOTE: `postgresql.synchronous` requires CloudNativePG >= 1.25
 databases:
   catalog-db:
