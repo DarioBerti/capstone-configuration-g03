@@ -42,6 +42,9 @@ reseal eurotransit keycloak-bootstrap-admin
 reseal eurotransit orders-db-debezium
 reseal eurotransit inventory-db-debezium
 reseal eurotransit payments-db-debezium
+# catalog signs browse-time price quotes with this EC PRIVATE key (consumed as PRICE_QUOTE_SIGNING_KEY);
+# its public half is non-secret (global.pricing.publicKey, injected into orders to verify locally).
+reseal eurotransit price-quote-signing
 # kafka ns — the Connect cluster authenticates with this; sealing the SAME live source guarantees the
 # passwords match the *-db-debezium ones above (CNPG sets the role password from those).
 reseal kafka debezium-db
