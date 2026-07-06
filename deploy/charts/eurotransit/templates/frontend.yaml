@@ -24,6 +24,8 @@ spec:
       labels:
         {{- include "eurotransit.labels" (dict "svc" "frontend" "root" $) | nindent 8 }}
     spec:
+      # non-money-path app surface: recoverable, so platform priority (evicted before the money path, after observability)
+      priorityClassName: eurotransit-platform
       terminationGracePeriodSeconds: 15
       containers:
         - name: frontend

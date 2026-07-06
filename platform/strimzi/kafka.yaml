@@ -43,6 +43,24 @@ spec:
     type: persistent-claim
     size: 5Gi
     deleteClaim: false
+  # HA: spread the 3 brokers ONE-PER-NODE. Without this the scheduler co-located all 3 on a single node (seen
+  # live 05/07) -> a single node loss takes out the whole KRaft quorum = Kafka down = money path down (would fail
+  # chaos-03 node-disruption). requiredDuringScheduling makes 1-broker-per-node a hard guarantee across the 3-node
+  # pool; it also rebalances memory off the previously overloaded node. (Losing a broker still keeps 2/3 = quorum.)
+  template:
+    pod:
+      # Kafka is load-bearing money-path infra -> critical priority: it is evicted LAST under memory pressure
+      # (and can preempt a priority-0 observability pod to reclaim capacity).
+      #
+      # NO broker anti-affinity ON PURPOSE. We tried to spread the 3 brokers one-per-node, but this AKS pool is
+      # BOTH memory- and DISK-constrained: the 3rd node has no free Azure data-disk slot (the same 12-disk ceiling
+      # behind the Part-2 inventory-db decision) AND is memory-full, so a 3rd broker (needs a 5Gi PVC + 768Mi) can
+      # never schedule there. A required rule deadlocked one broker Pending; even preferred can't place it. So we
+      # keep all 3 brokers RUNNING (2 will co-locate) rather than chase an unreachable 1-per-node. Documented HA
+      # caveat: a loss of the node holding 2 brokers drops the KRaft quorum — mitigated operationally (during
+      # chaos-03 we kill a node that does NOT hold the broker majority). Disk headroom (Pay-As-You-Go) would let
+      # us re-enable a hard spread.
+      priorityClassName: eurotransit-critical
 ---
 # The Kafka cluster itself (brokers are provided by the node pool above)
 apiVersion: kafka.strimzi.io/v1

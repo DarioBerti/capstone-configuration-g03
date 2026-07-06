@@ -1,6 +1,6 @@
 # Observability (Pillar D) — pinned decisions + Phase 4 work
 
-Continues Lab05. **Decisions pinned during design (team, 2026-06-10 — "Decisione 11"):**
+**Decisions pinned during design (team, 2026-06-10 — "Decisione 11"):**
 
 - **Tracing backend: Grafana Tempo** (not Jaeger). Native Grafana integration — traces,
   metrics and dashboards in one UI for the demo ("where did this order spend its time?") —

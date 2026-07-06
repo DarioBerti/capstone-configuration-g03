@@ -67,18 +67,18 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   the latency/partition chaos experiments.
 - **Status: OPEN** until validated under chaos.
 
-## 4. Thin `justfile` that ignored the team's established Lab01 convention
+## 4. Thin `justfile` that ignored the team's established justfile convention
 
 - **Produced:** an initial `justfile` with only `test`/`build`/`run`/`image` shortcuts — no
   local DoD verification, no `docker-run`/`docker-stop`/`health-check`, no `.dockerignore`.
-- **Why wrong:** Lab01 **explicitly required** (Step 2 + Step 4 + DoD item 4) the `justfile` to
+- **Why wrong:** the team's established convention requires the `justfile` to
   be the "versioned interface for recurring tasks" with a single recipe that verifies the DoD
-  locally end-to-end (build → test → image → run → wait → health → cleanup), and Step 3
-  explicitly required a `.dockerignore`. The team's own Lab01 `justfile` already did all this
+  locally end-to-end (build → test → image → run → wait → health → cleanup), plus a
+  `.dockerignore`. The team's own earlier `justfile` already did all this
   (`verify-local`, `act-ci`, JaCoCo, hooks). The agent produced something below the team's own
   established standard.
-- **How caught:** teammate flagged that the Lab01 `justfile` was richer; we re-read the Lab01
-  brief and confirmed the convention was prescribed, not optional.
+- **How caught:** teammate flagged that the team's earlier `justfile` was richer; we confirmed
+  the convention was prescribed, not optional.
 - **Fix:** rewrote the `justfile` with `set shell`, `docker-run`/`docker-stop`/`health-check`,
   and a `verify <svc>` / `verify-all` 7-step DoD flow with `trap` cleanup (adapted to 5 services,
   no frontend); added `.dockerignore` to every service. Validated with `just --list`.
@@ -233,7 +233,7 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   Payments left a possibly-live charge abandoned, uncounted — inconsistent with the saga's own stage-3
   park-on-failed-void. Separately, `orders_compensations_total{type=refund}` could **over-count** under concurrent
   drivers because the saga ignored the void's `replayed` flag.
-- **Why wrong:** deck 10 — every policy must emit an accurate, alertable signal; a doc that references a dead
+- **Why wrong:** every policy must emit an accurate, alertable signal; a doc that references a dead
   metric and a leak window that is only WARN-logged both violate that. The two saga drivers disagreeing on the
   same outcome is an internal incoherence.
 - **How caught:** the audit's observability + antipattern lenses; verified against the source.
@@ -249,13 +249,13 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   1. **5.3 (retry is safe ONLY because idempotent) was asserted by COMPOSITION, never in one flow.**
      `PaymentsRetryIntegrationTest` fires the real retry but its stub 503s at the transport layer *before* any side
      effect (nothing is ever charged to dedup; it asserts the attempt *count*, not a charge), while
-     `PaymentsServiceTest` dedups with two *direct* calls and no retry. No test modelled the slide-22 danger: a charge
+     `PaymentsServiceTest` dedups with two *direct* calls and no retry. No test modelled the danger: a charge
      that **commits on the server then loses its response**, so the client retransmits onto an idempotent endpoint.
   2. **The inventory `ReservationReconciler` had NO enabled-gate** (unlike orders' `OrderRecoverySweeper`): the 3
      inventory `@SpringBootTest` were only *timing-safe* (the `PT15S` sweep outran sub-second tests), not gated. After
      the #1 oversell fix added tests that seed already-expired holds, that became a latent race against the seat-count
      assertions on a shared cached context.
-- **Why it matters:** "a property you prove" (deck 11 s.41) is not proven if the proof is inferred across two tests
+- **Why it matters:** "a property you prove" is not proven if the proof is inferred across two tests
   in two services; and a test that passes only because a background loop happens to be slow is a flake waiting to fire.
 - **How caught:** the gap-analysis (coverage map + gating audit + chaos-doc design), each finding verified against the
   source; the 5.3 gap was then made **falsifiable** (removing the stub's `putIfAbsent` dedup turns the new test red).
@@ -286,7 +286,7 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
      was pinned in `design.md` §4b but missing from `platform/README.md` (the file §4b names as source of truth),
      violating the "never `latest`/pin in platform/README" rule.
 - **Why wrong:** a merge is not a no-op — resolving a `values.yaml` conflict toward the stale side silently undoes a
-  committed fix; and a CI that is "green" only because the build path never executes proves nothing (deck 08: a
+  committed fix; and a CI that is "green" only because the build path never executes proves nothing (a
   pipeline must actually exercise the artifact). The Phase-2 resilience (`app/fase-2`) was also left **unmerged**, so
   `app/main` after the PR was layer-folder layout **without** any circuit breaker/bulkhead/retry/429/void code.
 - **How caught:** a read-only re-audit of both repos after the PRs (branch-diff + CI run-history + `fromJSON` trace +
@@ -311,7 +311,7 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   **not exist** there → `ImagePullBackOff` → the app never reaches Healthy. This is precisely the symptom logged in
   `FASI_PROGETTO.md` ("Argo Synced&Healthy bloccato su immagini ACR"): the blocker was a config split-brain, not a
   missing image build. A pipeline whose output address differs from what the deployer reads is dead on arrival
-  (deck 08: build and deploy must agree on the artifact coordinate, not just the tag).
+  (build and deploy must agree on the artifact coordinate, not just the tag).
 - **How caught:** read-only cross-repo diff of the image coordinate — `env.REGISTRY` in `ci.yml` vs `global.registry`
   + `image.repository` in `values.yaml` — not by CI (no job asserts the two registries match).
 - **Fix:** `ci.yml` `REGISTRY` aligned to `labg03clusterregistry.azurecr.io` (the registry attached to the cluster
@@ -347,8 +347,8 @@ Format per entry: **what the agent produced → why it was wrong → how we caug
   on the same node (`…00000d`), despite a `topologySpreadConstraints{maxSkew:1, topologyKey: hostname}`.
 - **Why it matters:** the constraint uses `whenUnsatisfiable: ScheduleAnyway` → it is a **preference**, not a
   guarantee. The scheduler packed both pods on one node; a single node failure would take out the entire payments
-  capacity — exactly the failure-domain co-location the spread is meant to prevent (deck 11: "replication protects
-  only if replicas are across independent failure domains").
+  capacity — exactly the failure-domain co-location the spread is meant to prevent (replication protects
+  only if replicas are across independent failure domains).
 - **How caught:** reading live pod placement against node identity (not assuming the manifest's intent equals the
   runtime result). The chart *had* the constraint; only the live cluster revealed it wasn't binding.
 - **Decision (team-owned, not auto-applied):** `DoNotSchedule` would make the spread a hard guarantee, but on a
@@ -553,3 +553,151 @@ Running the demo runbook end-to-end on AKS from scratch surfaced things that onl
   abort MECHANISM is proven either way (stable stayed at 100/0, never promoted, never degraded) — but the
   clean "the analysis gate aborts it" story needs ~1.2s injected at >=25% weight. Documented in the runbook
   and the manifest rather than pretending a single magic number works.
+
+---
+
+# Application-repo episodes (data-model redesign + the `dev` merge + the Boot-4 tracing fix)
+
+The cases below are agent-mistake episodes from the **application repository** — the `dev` merge into
+`database_refactor`, the Trip/Station data-model redesign, and the Boot-4 tracing-inertness fix — merged
+here so this log is the single comprehensive graded record.
+
+## 26. `dev` merge — parallel `Explore` subagents OVERESTIMATED the merge and INVENTED migration collisions 🟨
+
+- **Produced:** the "collision map" from parallel `Explore` subagents claimed a **CRITICAL** textual conflict on
+  `orders/V1__baseline.sql` (`product_id` vs `trip_code`), **version-number collisions** between our migrations and
+  `dev`'s, and that `catalog`/`users` tests needed reworking.
+- **Why wrong:** none of it was true. `dev` never touched the `V1` baselines (it only **added**
+  `orders/V2__add_order_version.sql` and `inventory/V3__add_reservation_version.sql`): no baseline conflict, no
+  version-number clash (migrations are additive and stack). `catalog`/`users`/`notifications` are untouched by `dev`'s
+  12 commits, so they auto-merge in full. The subagents reasoned over the **shape of the diff** (`git diff base..dev`)
+  instead of the real three-way merge.
+- **How caught:** running `git merge-tree --write-tree origin/dev database_refactor` **before** picking a strategy —
+  an authoritative dry-run merge that returned the real conflict set: exactly 20 files confined to
+  `inventory`/`orders`/`payments`, **zero** migration conflicts, `catalog`/`users`/`notifications` clean.
+- **Fix:** planned and executed against `merge-tree`'s real set, not the agents' map. The migrations stacked
+  additively (our `V1` + `dev`'s `V2`/`V3`) with no manual reconciliation.
+- **Lesson:** an agent's "merge analysis" is speculation over diffs; the authoritative answer is a tool —
+  `git merge-tree` (a dry-run merge). Run the tool first and trust **it** over the agent's narrative, especially for
+  additive migrations, where the subagents over-alarmed.
+
+## 27. `dev` merge — the resolution compiled and passed 37/38, but one test was environment-fragile 🟧
+
+- **Produced:** the merge resolution kept `MetricCardinalityGuardTest` (from `dev`) as-is: it relies on Payments'
+  default base-url pointing at a **dead port** so `payments.void()` falls into the `UNAVAILABLE` fallback.
+- **Why wrong:** our branch made Payments an **OAuth2 resource server**. A real local Payments instance was running on
+  the default port `8082` and answered the **unauthenticated** probe with **401** (a 4xx) → the gateway mapped it to
+  `FAILED`, not `UNAVAILABLE` → red test. The test's assumption ("nothing is listening on the default port") is broken
+  precisely by our auth change. The code compiled and 37/38 orders tests passed; only the full suite surfaced it.
+- **How caught:** `./gradlew test` on the full suite (89 tests). The XML report showed
+  `expected: <UNAVAILABLE> but was: <FAILED>`; `lsof` confirmed a local `java` process on `8082` and `curl` returned
+  `HTTP 401`.
+- **Fix:** pinned the test's Payments base-url to a guaranteed-dead port (`http://localhost:1`) in the test's
+  `@SpringBootTest` properties (as `PaymentsGatewayBreakerIntegrationTest` already does), making it deterministic
+  regardless of local processes. Re-ran **with the local services still up** → green (38/38, 89/89 total).
+- **Lesson:** "compiles + almost all green" is not enough: the full suite caught a test with an implicit environment
+  dependency. A test that assumes "nothing is listening" becomes fragile the moment auth makes a real-but-unauthenticated
+  call return 4xx — pin the external dependency explicitly (a declared dead port) instead of relying on the absence of
+  local processes.
+
+## 28. Data-model redesign — `CHAR(n)` columns that would fail `Hibernate validate` at startup 🟧
+
+- **Produced:** the agent's first-draft schema used `CHAR(2)` for `country` and `CHAR(3)` for `currency` (looks correct
+  for fixed-width ISO codes), with the entities mapping them as `String`.
+- **Why wrong:** Flyway owns the schema and Hibernate runs `ddl-auto: validate`. A `String` property validates against
+  `VARCHAR`; a `CHAR/bpchar` column exposes a different JDBC type, so the app would **not start** in cluster
+  (`SchemaManagementException: wrong column type … found [bpchar], expected [varchar]`) — and our H2 tests would **not**
+  catch it (exactly the H2-vs-Postgres gap).
+- **How caught:** design review against the "Flyway owns the schema + Hibernate validates" invariant (root `CLAUDE.md`),
+  plus the fact that **no existing migration in the repo uses `CHAR`**.
+- **Fix:** used `VARCHAR(2)`/`VARCHAR(3)` for `country`/`currency` everywhere (catalog `trips`, orders, payments, users).
+  We also hardened the safety net so this bug class can no longer hide: the money-path services (`orders`, `inventory`,
+  `payments`) were migrated **from H2 to Testcontainers Postgres**, so `validate` now runs against the real schema in CI.
+- **Lesson:** agent-produced DDL diverges from the ORM's validation rules in ways that surface only on the real database.
+  Keep the test datasource faithful to production (Testcontainers, not H2) and treat schema-validate parity as a
+  first-class check.
+
+## 29. Data-model redesign — a test that would pass for the WRONG reason 🟨
+
+- **Produced:** the `users` service test for the realm-import gotcha (a token without a `sub` claim must return **400**,
+  not an NPE/500) built the token as `jwt().jwt { it.claims { c -> c.remove("sub") } }`.
+- **Why wrong:** the only default claim of the `jwt()` post-processor is `sub`; removing it yields an **empty claim set**,
+  and `Jwt.Builder.build()` throws *"claims cannot be empty"*. The request would fail **inside the test infrastructure,
+  before reaching the controller** — the test would be red (or, with another setup, green) for an infrastructural reason
+  and would **not** exercise the `requireSubject()` → 400 guard it claims to verify.
+- **How caught:** reasoning about the `Jwt.Builder` contract while writing the test (it needs a non-empty token),
+  confirmed by running it.
+- **Fix:** kept a non-`sub` claim so the token builds but `sub` is truly absent:
+  `jwt().jwt { it.claim("email", "…").claims { c -> c.remove("sub") } }`. The test now genuinely drives the controller
+  to a 400.
+- **Lesson:** "the test is green" does not mean "the test verifies what it says". Agent-written tests in particular need
+  a check that the assertion can pass **only** for the intended reason — verify the negative path actually reaches the
+  code under test.
+
+## 30. Data-model redesign — top-level `equals` helper shadowing `Any.equals` 🟦
+
+- **Produced:** composing `TripFilter` into a `Specification`, the agent generated a top-level
+  `private fun equals(attribute: String, value: Any): Specification<Trip>` in `CatalogService.kt`.
+- **Why wrong:** `equals` is the name of `Any`'s universal method: a top-level `equals` function is confusing, risks
+  shadowing in reading comprehension, and is a smell (a future caller might think they are invoking equality, not a
+  predicate builder).
+- **How caught:** code review during authoring, before running.
+- **Fix:** renamed the helper to `eq(...)`; explicit intent and no shadowing risk.
+- **Lesson:** agents reuse "obvious" names that collide with language/runtime names. A quick re-read of identifier names
+  catches these smells before they enter the codebase.
+
+## 31. Data-model redesign — divergent seed `code` vocabulary between two parallel planning agents 🟧
+
+- **Produced:** we ran multiple parallel "Plan" agents, one for Catalog and one for the money path. Both proposed the
+  canonical set of trip `code`s for the seeds — but they **did not match**: Catalog's plan proposed `FR9612-20260629`
+  (Turin→Rome) and `IC1015-20260629` (Milan→Naples), while the money-path plan proposed `FR9594-20260629` and
+  `IC1535-20260629` for the same routes.
+- **Why wrong:** Catalog and Inventory share **only** the `code` value (database-per-service: the "browse → order →
+  reserve" join works only if Catalog exposes the same `code` that Inventory seeds for its seats). Divergent codes would
+  mean that ordering a trip seen in Catalog would hit a non-existent `trip_code` in Inventory → reservation impossible,
+  **checkout broken in the demo**.
+- **How caught:** reconciling the two agents' outputs while writing the final plan: the code divergence jumped out when
+  comparing the two "canonical" tables.
+- **Fix:** defined **one** team-owned "Canonical shared trip vocabulary" in the plan
+  (`FR9592` / `FR9612` / `IC1015` / `FR9999-20260629`) and seeded the **same** codes in both
+  `catalog/V2__seed_demo_data.sql` and `inventory/V2__seed_demo_data.sql`.
+- **Lesson:** parallel agents don't share state: each invents the "shared" values on its own. On a cross-service contract
+  (here the `code` vocabulary) you need **one** team-decided source of truth, not a trusting merge of independent outputs.
+
+## 32. Data-model redesign — `users` migration plan with a "guessed" constraint name 🟨
+
+- **Produced:** the agent's plan for `users` recommended an **additive** `V2` migration to switch to the surrogate PK,
+  with steps like `ALTER TABLE user_profiles DROP CONSTRAINT user_profiles_pkey;` and the note *"in Testcontainers it
+  will be `user_profiles_pkey`"*.
+- **Why wrong:** (a) the PK constraint name was **guessed** (an assumption about the Postgres default) — fragile if it
+  diverged. (b) the whole ALTER to swap the PK is **unnecessary archaeology** in a pre-production project where every
+  test run starts from a clean Testcontainers Postgres and there is no migration history to preserve.
+- **How caught:** plan review: the repo's policy (Flyway owns the schema, no prod data) makes rewriting the baseline
+  simpler and less assumption-prone than the ALTER.
+- **Fix:** adopted a **uniform policy** — rewrite `V1__baseline.sql` in place (with `id UUID` PK + `keycloak_sub`
+  `NOT NULL UNIQUE` + `locale`/`preferred_currency`), as for every other service. No constraint name to guess. Noted the
+  checksum caveat in the plan (recreate any persistent KIND/cluster DBs or `flyway repair`).
+- **Lesson:** agents often propose the "seemingly prudent" path (incremental ALTERs) that in fact hides **assumptions**
+  (object names) and needless complexity. In pre-production, with faithful tests, the simplest assumption-free choice is
+  usually the right one — but the team decides it.
+
+## 33. Boot-4 tracing dependencies were INERT — the auto-config module was missing 🟥
+
+- **Produced:** Phase 4, cross-Kafka tracing. All services had declared `micrometer-tracing-bridge-otel` +
+  `opentelemetry-exporter-otlp` for weeks and configured `management.tracing.sampling.probability: 1.0` and
+  `management.otlp.tracing.endpoint` — and the roadmap said "pipeline proven, the apps must export spans". An agent's
+  first wiring attempt stopped there, assuming deps + properties were enough.
+- **Why wrong:** in **Spring Boot 4** the tracing auto-configuration no longer lives in
+  `spring-boot-actuator-autoconfigure` (as in Boot 3) but in the dedicated module
+  **`spring-boot-micrometer-tracing-opentelemetry`** (which pulls `spring-boot-micrometer-tracing` +
+  `spring-boot-opentelemetry`). Without that module **no `Tracer`/`Propagator`/OTLP-exporter bean is created**: the deps
+  and properties were a silent no-op — zero spans exported, MDC without traceId/spanId, and no error anywhere.
+- **How caught:** a new test (`SagaCompletionMetricsTest`) that injects `Tracer` failed with
+  `No qualifying bean of type 'io.micrometer.tracing.Tracer'`; a classpath inspection (`gradlew dependencies`) showed
+  that NO boot tracing module was present — so the problem wasn't "the tests disable tracing", it was that tracing
+  didn't exist in production either.
+- **Fix:** added `org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry` to all six services (the
+  existing properties stay valid: the module still supports the `management.otlp.tracing.*` aliases). Verified with the
+  full suite (`just test-all`, 6/6 green) and with the test asserting the W3C `traceparent` persisted in the outbox row.
+- **Lesson:** "dependency on the classpath + property configured" does NOT imply "feature active": major upgrades move
+  auto-configurations. The proof must be **positive** (an injected bean, a visible span), never the absence of errors.

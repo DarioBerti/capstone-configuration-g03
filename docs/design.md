@@ -46,11 +46,18 @@ La CI **non tocca mai il cluster** (scrive solo il tag via PAT least-privilege).
 
 ## 4. Design per pilastro
 ### A. Distributed & async (Pilastro A)
-Money path = **saga orchestrata async**: `POST /api/orders` (202 Accepted, ack durevole) → orders emette il comando
-`reserve-seats` → inventory prenota (hold) e risponde `reservation-result` (via il **suo** outbox) → orders emette
-`authorize-payment` → payments autorizza e risponde `payment-result` → orders emette `confirm-seats` + `capture-payment`
-→ CONFIRMED. Compensazioni: `release-seats` / `cancel-authorization`. Stato reply-driven
-`PENDING→RESERVED→AUTHORIZED→CONFIRMED (+REJECTED)`; `OrderTimeoutSweeper` ri-guida gli ordini bloccati oltre la deadline.
+Money path = **booking a due fasi** guidato dall'utente, poi **saga orchestrata async command/reply** (orders =
+coordinatore, nessuna chiamata HTTP sul money path). Fase sincrona: `POST /api/orders` crea un ordine **DRAFT**;
+`POST /{id}/legs` aggiunge la tratta outbound (obbligatoria) + eventuale return — ogni add **prenota i posti on-add**
+e la prima apre la **finestra di hold** backend-authoritative (`expiresAt`); `POST /{id}/pay` (202) autorizza entro
+la finestra. Da lì è **reply-driven**: `reserve-seats`→`reservation-result` (per tratta, con `tripCode`),
+`authorize-payment`→`payment-result`, fan-out `confirm-seats` su ogni tratta prenotata→`seats-confirmed` (fan-in),
+`capture-payment` **una sola volta** quando nessuna tratta resta prenotata→`payment-captured`→CONFIRMED. **Nessun
+trigger `order-placed`**: la saga parte dall'add-leg/pay sincroni. Stati ordine `DRAFT→HELD→PAYING→AUTHORIZED→CONFIRMED
+(+REJECTED)`; compensazioni `release-seats` / `cancel-authorization`. Due sweeper `@Scheduled`: `OrderTimeoutSweeper`
+ri-guida gli ordini bloccati in PAYING/AUTHORIZED, `CheckoutExpirySweeper` scade la finestra (`EXPIRED_NO_PAYMENT`
+vs `SERVICE_UNAVAILABLE`). PSP dietro `PaymentGateway` (`payments.provider = mock|paypal`, PayPal Orders v2 sandbox);
+SSE via snapshot sul topic `order-status-changed` → notifications. Dettaglio completo del money path nel README app.
 **Outbox→Kafka via Debezium CDC**: ogni servizio ha una tabella outbox; Debezium (Strimzi **Kafka Connect a 2 repliche**,
 un connector per servizio) legge il WAL (CNPG `wal_level=logical` + role di replication) e pubblica sui topic. **DLT per
 servizio** + retry bounded. Recoverability: un servizio che crasha riprende leggendo i topic (at-least-once + handler
@@ -73,6 +80,25 @@ connector-down e verificata dal chaos #5.
   PSP reale/PayPal) — allora via `@CircuitBreaker/@Retry/@TimeLimiter` (Boot 4, `resilience4j-spring-boot4` + aspectj starter).
 - **K8s**: PDB + topologySpread sui servizi `criticalPath`; probe (readiness=serve ora / liveness=processo); graceful
   shutdown; HPA (catalog/orders/users). *Prod-grade da valutare:* **KEDA** per scalare i consumer sul lag Kafka.
+- **Eviction deterministica sotto node-pressure (pool studentesco, 05/07)**: il pool `3×Standard_B2s_v2` è
+  memory-tight (~5.65Gi allocatable/nodo) → sotto memory pressure il kubelet sfratta *lowest-priority-first*, e senza
+  priorità esplicite tutti gli app-pod stanno a 0 ⇒ vittima casuale (il "pod killed at random"). Due **PriorityClass**
+  (`platform/priorityclasses.yaml`) rendono lo sfratto **deterministico**: `eurotransit-critical` (1e6 — money path
+  orders/inventory/payments **+ i broker Kafka**) sfrattato per ultimo e può preemptare l'osservabilità;
+  `eurotransit-platform` (1e5 — catalog/users/notifications/frontend) recuperabile, sfrattato dopo l'osservabilità;
+  l'**osservabilità resta a priority 0 → prima vittima**. Entrambe ≪ `system-cluster-critical` (2e9), così
+  CNI/DNS/metrics non vengono mai preemptati. Assegnate per-servizio in `_workload.tpl` via `svc.criticalPath`.
+- **Right-sizing a due tier** (request ≈ RSS live — leggermente sopra, mai sotto; **nessun CPU limit**, il throttling
+  danneggerebbe l'ack SLO): tier **LIGHT** `320Mi/512Mi` req/lim (catalog/users/notifications, RSS live 217-285Mi) e
+  tier **CRITICAL** `448Mi/640Mi` (money path, copre il picco ~422Mi di orders, outlier della flotta); DB a
+  `192Mi/512Mi`. **HPA di orders `maxReplicas` 4→3** (uno spike CPU di cold-start lo gonfiava a 4 pod senza bisogno
+  duraturo). Effetto verificato live: `MemoryPressure=False`, 0 OOM, money path 200 — risolve gli sfratti casuali.
+- **Caveat HA Kafka (pool disk-constrained)**: i 3 broker restano **co-locati** (nessuna anti-affinity). Lo spread
+  1-broker-per-nodo è fisicamente irrealizzabile: il 3° nodo non ha slot data-disk Azure liberi (stesso **soffitto
+  12-dischi** dietro la scelta inventory-db di Parte 2) ed è memory-full ⇒ un 3° broker (PVC 5Gi + 768Mi) non ci si
+  schedula mai (`required` → deadlock Pending; `preferred` → comunque non piazzato). Conseguenza: perdere il nodo che
+  ospita **2 broker** fa cadere il quorum KRaft → mitigazione operativa in **chaos-03: killare un nodo che NON detiene
+  la maggioranza dei broker**. Un disco Pay-As-You-Go riabiliterebbe lo spread hard.
 
 ### D. Delivery + observability (Pilastro D)
 - **GitOps**: Argo CD riconcilia `main`; drift self-heal + prune; secret in Git solo come **SealedSecrets**.

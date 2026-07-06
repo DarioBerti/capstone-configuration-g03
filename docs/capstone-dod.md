@@ -13,15 +13,15 @@ Team-authored DoD. Each item is short, operational, and checkable. Status: ☐ t
 > team decision: whether the retired breaker is acceptable for the rubric or reinstated on a remaining sync hop.
 
 ## Pillar A — Distributed design & async
-- ☑ Service decomposition documented with sync vs async boundaries and a justification each. *(design.md §1-§3 + architecture-flow.md sequence/topology diagrams)*
+- ☑ Service decomposition documented with sync vs async boundaries and a justification each. *(design.md §1-§3 + the app README money-path trace diagram)*
 - ☑ Order pipeline is asynchronous (Kotlin coroutines/Flows): `POST /api/orders` returns
   quickly (202) and **the entire money path** then proceeds as a Kafka command/reply saga (no sync
-  Orders→Inventory/Payments call). *(OrdersController 202 + outbox; OrderPlacedListener → OrderSaga → OrderStateMachine; SagaReplyListeners; OutboxPublisher relay on all three money-path services — decision 13)*
+  Orders→Inventory/Payments call). *(booking intake create/add-leg/pay + outbox; OrderSaga → OrderStateMachine; SagaReplyListeners; transactional outbox on all three money-path services, drained by Debezium CDC)*
 - ☑ Structured concurrency: pipeline runs in a supervised `CoroutineScope` (failure domain). *(OutboxPublisher, OrderTimeoutSweeper, ReservationReconciler — SupervisorJob)*
 - ☑ Cooperative cancellation on SIGTERM: in-flight work finishes or cancels cleanly; no
   orphaned tasks; no double-processing; readiness flips to "refusing traffic" while draining. *(DisposableBean.destroy → scope.cancel; delay as sole suspension point; chart terminationGracePeriodSeconds 30 + preStop)*
 - ☑ Written analysis: where async reduces cost/scaling pressure vs where it does not
-  (CPU-bound), referencing blocking-vs-suspending. *(design.md §6 + capstone-application-g03/docs/sync-vs-async-resilience.md; refreshed for the decision-13 cutover)*
+  (CPU-bound), referencing blocking-vs-suspending. *(design.md Pillar C + the app README §8 resilience; refreshed for the async cutover)*
 
 ## Pillar B — Consistency under contention
 - ☑ Inventory consistency model chosen and justified in CAP/PACELC terms (what we sacrifice

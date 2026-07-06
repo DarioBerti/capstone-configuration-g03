@@ -1,0 +1,26 @@
+# PriorityClasses for deterministic node-pressure eviction (Pillar C, constrained student cluster).
+#
+# The 3x Standard_B2s_v2 pool is memory-tight (~5.65Gi allocatable/node). Under memory pressure the kubelet
+# evicts pods that exceed their memory REQUEST, ordered LOWEST-priority-first. Without explicit priorities every
+# app pod sits at 0 and the victim is effectively random (what Riccardo saw: "pods killed at random"). Giving the
+# money path a high priority makes eviction DETERMINISTIC: if the node must kill something, it kills something
+# NON-fundamental — observability (Prometheus/Grafana/Tempo/OTel), which stays at the default priority 0 — before
+# an orders/inventory/payments pod. Recoverable app services sit in between.
+#
+# Values are far below system-cluster-critical (2000000000) so system/CNI/DNS/metrics pods are never preempted.
+# Applied at platform bootstrap (cluster-scoped, like the Kafka CRs): `kubectl apply -f platform/priorityclasses.yaml`.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: eurotransit-critical
+value: 1000000
+globalDefault: false
+description: "Money path (orders/inventory/payments). Evicted LAST under node memory pressure."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: eurotransit-platform
+value: 100000
+globalDefault: false
+description: "Non-money-path app services (catalog/users/notifications/frontend). Recoverable; evicted before critical, after observability (priority 0)."

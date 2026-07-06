@@ -44,7 +44,7 @@ frontend:
   exposeInternalDebugRoutes: false
   image:
     repository: labg03clusterregistry.azurecr.io/eurotransit/frontend
-    tag: 9cccbff
+    tag: b612c8d
     pullPolicy: IfNotPresent
   replicaCount: 1
   # cluster Service port (nginx listens on 80 inside the pod)
@@ -84,10 +84,16 @@ keycloak:
     extraRedirectUris: []
     extraWebOrigins: []
   devDirectAccessGrants: false
-  # Pre-seeded test accounts for the eurotransit realm. EMPTY in prod (real users come from Keycloak);
-  # values-kind.yaml populates it so a fresh kind cluster has ready-to-use logins. Each entry:
-  #   { username, email, firstName, lastName, password, roles: [USER|ADMIN ...] }
-  testUsers: []
+  # Pre-seeded test accounts for the eurotransit realm. values-kind.yaml adds more for local logins.
+  # Each entry: { username, email, firstName, lastName, password, roles: [USER|ADMIN ...] }
+  # NOTE: passwords here are PLAINTEXT in Git — keep this to throwaway TEST accounts only, never real users.
+  testUsers:
+    - username: admin
+      email: admin@eurotransit.test
+      firstName: Admin
+      lastName: Test
+      password: admin
+      roles: [USER]
 # Per-service desired state
 # "db" references a database name in ".databases" (or null)
 # "criticalPath" marks services on the money path (drives PDBs / spread / stricter SLOs)
@@ -97,7 +103,7 @@ services:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
       repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
-      tag: 8ed53f1
+      tag: d5ac9a0
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
     # baseline replica count (also the HPA floor / PDB reference)
@@ -121,7 +127,7 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      tag: 8ed53f1
+      tag: 4407f01
       #tag: a1e995a
       pullPolicy: IfNotPresent
     replicaCount: 2
@@ -137,10 +143,12 @@ services:
     # orders-oidc) and extraEnv (INVENTORY/PAYMENTS_BASE_URL) were removed with the sync→async cutover. It stays a
     # resource server (secured) only to validate the inbound user JWT on POST /api/orders.
     # Public sync entry of the money path: scale out under load instead of queueing to collapse (works together with load shedding / 429, Pillar C)
+    # maxReplicas capped 4->3 (05/07): on the memory-tight pool a cold-start CPU spike ballooned orders to 4 pods
+    # (~4x448Mi) with no lasting need (idle CPU ~39%); 3 keeps burst headroom while bounding the memory footprint.
     hpa:
       enabled: true
       minReplicas: 2
-      maxReplicas: 4
+      maxReplicas: 3
       targetCPUUtilizationPercentage: 70
     # Fase 5 — progressive delivery (Argo Rollouts). With a strategy set, the orders workload renders as a
     # Rollout CRD instead of a Deployment and the controller executes the release policy below on EVERY image
@@ -186,7 +194,7 @@ services:
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: 9cccbff
+      tag: 4407f01
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -200,7 +208,7 @@ services:
   payments:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/payments
-      tag: 8ed53f1
+      tag: 4407f01
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -222,7 +230,7 @@ services:
   notifications:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/notifications
-      tag: 8ed53f1
+      tag: 4407f01
       pullPolicy: IfNotPresent
     # single replica: this service is allowed to be fully down (graceful degradation)
     replicaCount: 1
@@ -330,7 +338,7 @@ databases:
         secret: orders-db-debezium # basic-auth (username=debezium, password); sealed under deploy/ (ns eurotransit)
         replication: true
   inventory-db:
-    # 2 instances (primary + 1 sync standby). DECISION Part-2 (04/07, team + Malnati-track constraint = stay on
+    # 2 instances (primary + 1 sync standby). DECISION Part-2 (04/07, team decision = stay on
     # the free Students sub, 6 vCPU / 12 data-disk slots MAXED): the full-HA stack (3 inventory + 3 Kafka + 2
     # orders + 3 single-instance DBs + Prometheus) needs exactly 12 disks = the pool's hard ceiling, so cold-start
     # was a race with no slack and a different component (3rd broker / 3rd inventory / an app) lost each time.
@@ -376,11 +384,22 @@ databases:
 # steady-state (never below real for 5/6 services; orders' 422 is covered by the limit, a request is a
 # scheduling floor, not a cap), limit 640Mi = peak + ~50% headroom so a GC/load spike never OOM-kills mid-chaos.
 resources:
-  # guaranteed share the scheduler reserves (≈ measured steady-state RSS)
+  # LIGHT tier (non-money-path: catalog, users, notifications). Live RSS 05/07 is 217-285Mi, so request 320Mi
+  # stays comfortably ABOVE real use (slight over, never under — per the "don't under-provision" rule) while
+  # freeing ~64Mi/pod of the old 384 booking. No CPU limit (throttling hurts the ack SLO); 512Mi memory ceiling.
   requests:
     cpu: 50m
-    memory: 384Mi
-  # hard ceiling (memory only -> a CPU limit would throttle latency-sensitive spikes)
+    memory: 320Mi
+  limits:
+    memory: 512Mi
+# CRITICAL tier (money path: orders, inventory, payments). Live RSS 05/07 is 356-391Mi with orders the fleet
+# outlier peaking ~422Mi, so request 448Mi covers the peak (never under-books the money path); limit 640Mi keeps
+# GC/load headroom so a spike never self-OOMs mid-chaos. Paired with the eurotransit-critical PriorityClass these
+# pods are the LAST to be node-pressure-evicted. Selected per-service in _workload.tpl by svc.criticalPath.
+criticalResources:
+  requests:
+    cpu: 50m
+    memory: 448Mi
   limits:
     memory: 640Mi
 # Resources for every PostgreSQL instance (applied to all Cluster CRs).
