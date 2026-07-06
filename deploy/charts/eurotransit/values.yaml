@@ -163,8 +163,8 @@ services:
     # otherwise never fire on a service that redeploys often (canary). Set ENABLED=false to turn it off entirely.
     extraEnv:
       APP_DRAFT_SWEEPER_ENABLED: "true"
-      APP_DRAFT_SWEEPER_POLL_INTERVAL: "PT6H"
-      APP_DRAFT_SWEEPER_MAX_AGE: "P1D"
+      APP_DRAFT_SWEEPER_POLL_INTERVAL: "PT1H"
+      APP_DRAFT_SWEEPER_MAX_AGE: "PT3H"
     # Public sync entry of the money path: scale out under load instead of queueing to collapse (works together with load shedding / 429, Pillar C)
     # maxReplicas capped 4->3 (05/07): on the memory-tight pool a cold-start CPU spike ballooned orders to 4 pods
     # (~4x448Mi) with no lasting need (idle CPU ~39%); 3 keeps burst headroom while bounding the memory footprint.
