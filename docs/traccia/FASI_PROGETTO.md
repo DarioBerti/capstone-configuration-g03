@@ -64,10 +64,12 @@ With the async cutover, the **synchronous** breaker/bulkhead/retry were **retire
 - ✅ **Edge backpressure**: `@RateLimiter` on the synchronous intake → **429 + Retry-After**.
 - ✅ **Async resilience**: **per-service DLT** + bounded consumer retry.
 - ✅ **The circuit breaker returns around the one real sync egress** — the **PayPal PSP** (`@CircuitBreaker`/
-  `@Retry` on the gateway, Boot 4 `resilience4j-spring-boot4` + aspectj starter).
+  `@Retry` on the gateway, Boot 4 `resilience4j-spring-boot4` + aspectj starter). The retry uses **exponential
+  backoff + jitter** (`ofExponentialRandomBackoff`: base 0.5s ×2, ±50% randomization) so retries after a shared
+  PSP blip don't thunder it in lockstep. (The Kafka consumer DLT retry stays a bounded `FixedBackOff(500ms, 3)`
+  by design — it's poison-message parking, not a remote call.)
 - ⬜ **Candidate prod-grade follow-ups (team decision):** explicit bulkhead = separate consumer groups +
-  `listener.concurrency`; exponential backoff + jitter on retries; **KEDA** consumer autoscaling on Kafka lag
-  (not CPU-HPA).
+  `listener.concurrency`; **KEDA** consumer autoscaling on Kafka lag (not CPU-HPA).
 
 ## Phase 3 — Platform on the real cluster ✅ (verified on AKS)
 - ✅ Traefik, cert-manager, **CloudNativePG** (sync replication on inventory/orders → RPO=0), **Strimzi/Kafka**,
