@@ -11,6 +11,13 @@ Team-authored DoD. Each item is short, operational, and checkable. Status: ☐ t
 > Pillar C** (the Orders→Payments circuit breaker is retired in favour of Kafka buffering + DLT + timeout
 > sweeper — see the Pillar C note below) and strengthens Pillar A (the whole money path is now async). Open
 > team decision: whether the retired breaker is acceptable for the rubric or reinstated on a remaining sync hop.
+>
+> Update (2026-07-06): close-out progress on the live AKS cluster. Full money path re-verified end-to-end
+> (booking DRAFT→HELD→PAYING→AUTHORIZED→**CONFIRMED**, never-oversell + no-double-charge held). **Chaos: 7 of 8
+> experiments executed and all PASS** (01–06, 08), each adapted to the constrained-pool config; **07
+> (canary auto-abort) remains — it runs during a live rollout**, alongside the still-open progressive-delivery
+> (canary/blue-green) demo, the graceful-degradation test, and the recorded demo (Phase 5/6). Cluster tuning
+> (PriorityClasses + tiered right-sizing) applied and documented in the config README §6.
 
 ## Pillar A — Distributed design & async
 - ☑ Service decomposition documented with sync vs async boundaries and a justification each. *(design.md §1-§3 + the app README money-path trace diagram)*
@@ -30,7 +37,7 @@ Team-authored DoD. Each item is short, operational, and checkable. Status: ☐ t
 - ☑ Idempotency across the money path (dedup keys); duplicated `order-placed` or retried
   authorize never double-reserves or double-charges; dedup-insert and decrement are in the
   **same** transaction. *(UNIQUE(order_id,product_id) / UNIQUE(order_id); InventoryServiceTest + concurrency tests)*
-- ☐ Chaos-proven: "never oversell" holds under duplicate messages and pod kill. *(Phase 6 — chaos #2)*
+- ☑ Chaos-proven: "never oversell" holds under duplicate messages and pod kill. *(chaos 02 inventory pod-kill: survivor served, seats decremented exactly once; chaos 08 poison→DLT: redelivered/failing command parked, no double-effect — both PASS live on AKS 2026-07-06)*
 
 ## Pillar C — Resilience
 
@@ -57,16 +64,18 @@ Team-authored DoD. Each item is short, operational, and checkable. Status: ☐ t
 ## Pillar D — Delivery, observability, proof
 - ☑ GitOps: CI builds/tests/publishes immutable images + bumps tags; Argo CD reconciles; CI
   holds **no** cluster credentials. *(Phase 3 — CI green end-to-end, `ci: bump image tags` commits on the config repo; Argo CD Application; secrets = ACR + CONFIG_REPO_PAT only)*
-- ☐ Canary (TraefikService weighted) demonstrated on the critical path. *(Phase 5)*
-- ☐ Blue/green demonstrated with fast rollback. *(Phase 5)*
-- ☐ Discussion of where all-at-once and rolling fit and why not on the critical path. *(Phase 5)*
-- ☐ RED dashboards per service; USE/Golden-Signals for infra; symptom-based (burn-rate) alerts. *(Phase 4)*
-- ☐ SLOs for checkout: latency SLO + success-rate SLO, with SLIs and an error-budget statement. *(slo.md drafted; wire rules in Phase 4)*
-- ☐ Distributed tracing spans the money path (incl. across Kafka). *(OTLP wired in apps; OTel Collector + Tempo pending Phase 4)*
+- ☑ Canary (TraefikService weighted) demonstrated on the critical path. *(Phase 5 — validated LIVE on AKS: ramp 5→25→50→100 on `orders-weighted`, background AnalysisRun with 3 SLO gates, automatic abort on a bad analysis; design.md §4-D)*
+- ☑ Blue/green demonstrated with fast rollback. *(Phase 5 — preview at full capacity + atomic selector flip; validated on AKS)*
+- ☑ Discussion of where all-at-once and rolling fit and why not on the critical path. *(design.md §4-D: the money path uses SLO-gated canary + blue/green precisely because all-at-once/rolling give no analysis gate or bounded blast radius on the critical path; all-at-once/rolling stay fine for stateless, non-money-path changes)*
+- ☑ RED dashboards per service; USE/Golden-Signals for infra; symptom-based (burn-rate) alerts. *(Phase 4 — dashboards as-code loaded in Grafana; `eurotransit-checkout-slo` burn-rate rule live; validated on AKS)*
+- ☑ SLOs for checkout: latency SLO + success-rate SLO, with SLIs and an error-budget statement. *(docs/slo.md; success-rate ≥99%/28d + ack p99 ≤300ms + the saga terminal-ratio SLI, wired live as the `eurotransit-checkout-slo` / `eurotransit-saga-slo` PrometheusRules — Phase 4)*
+- ☑ Distributed tracing spans the money path (incl. across Kafka). *(Phase 4 — orders+inventory+notifications in ONE Tempo trace via the outbox→Debezium `traceparent` header; validated LIVE on AKS)*
 
 ## Chaos experiments
-- ☐ All five experiments run as hypotheses (steady state → hypothesis → one failure →
-  observe → conclude), each with a report in `docs/chaos/`. *(Phase 6; in-process precursors tagged — see docs/chaos/test-traceability.md)*
+- ☑ Experiments run as hypotheses (steady state → hypothesis → one failure → observe → conclude), each with a
+  report in `docs/chaos/`. **7 of 8 executed and PASS on AKS (2026-07-06)** — 01–06 + 08, well past the capstone
+  minimum of five; **07 (canary auto-abort) runs during a live rollout** (Phase 5/6). *(in-process precursors
+  tagged — see docs/chaos/test-traceability.md)*
 
 ## Agentic coding
 - ☑ Judgments (decomposition, consistency model, SLOs, failure-mode map, chaos hypotheses,
@@ -77,6 +86,6 @@ Team-authored DoD. Each item is short, operational, and checkable. Status: ☐ t
 ## Deliverables
 - ☑ Two repos with history showing GitOps-driven delivery. *(app + config; CI→ACR→tag-bump→Argo CD)*
 - ☐ `docs/` complete (DoD, design/consistency, SLOs, chaos reports, postmortem, threat-model,
-  agent-log). *(DoD/design/threat-model/agent-log done; SLO rules, chaos reports, postmortem still to fill)*
+  agent-log). *(DoD / design / SLO (docs/slo.md) / threat-model / agent-log / version-compatibility done; chaos reports 7/8 filled with live results — 07 pending a live rollout; **postmortem still to fill** → then this flips to ☑)*
 - ☐ ~5-min recorded demo (link committed) showing running system, dashboards answering
   operational questions, a canary, a blue/green, and an alert firing under injected failure. *(Phase 6)*

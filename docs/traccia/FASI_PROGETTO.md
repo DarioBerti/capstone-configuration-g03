@@ -4,14 +4,16 @@ Shared **progress map**: where we are, what is done/verified, what remains — a
 Update it when a phase changes state. The high-level **design & implementation choices** now live in the two
 repo READMEs; the graded record of caught agent mistakes is in `docs/agent-log.md`.
 
-> **WHERE WE ARE (2026-07-05):** Phases 0–5 **done and validated LIVE on AKS** (first async deploy: money path
+> **WHERE WE ARE (2026-07-06):** Phases 0–5 **done and validated LIVE on AKS** (first async deploy: money path
 > CONFIRMED end-to-end, CDC up, cross-Kafka tracing in Tempo, SLO-gated canary ramp + automatic abort). Phase 4
 > CLOSED (incl. #8 exemplar / Tempo datasource). The **booking rework** (PayPal PSP behind a gateway, SSE
 > saga-status stream, order-legs + checkout hold window, storefront frontend) is **merged on `main`**.
 > **Constrained-cluster tuning done this session:** PriorityClasses (deterministic node-pressure eviction),
 > two-tier right-sizing, `orders` HPA 4→3, and the Kafka all-on-one-node HA caveat (see the config README §6).
 > Decisions: **D9 = Argo Rollouts**, **PG17 failover-slots = NO** (best-effort notification loss accepted).
-> **Remaining:** Phase 6 execution (8 runbooks ready — Chaos Mesh on AKS + a live session + postmortem + demo).
+> **Chaos (Phase 6): 7 of 8 experiments executed LIVE on AKS (2026-07-06) — all PASS** (01–06, 08), each adapted
+> to the constrained-pool config. **Remaining:** 07 (canary auto-abort, run during a live rollout) + the blameless
+> postmortem + the ~5-min recorded demo.
 > The AKS cluster is **stopped** except during sessions (always `az aks stop` at the end — student subscription).
 
 Legend: ✅ done · 🔄 in progress · ⬜ to do
@@ -23,7 +25,7 @@ Legend: ✅ done · 🔄 in progress · ⬜ to do
  Phase 3  Platform on real cluster  ✅   ← verified on AKS; + Debezium (Kafka Connect 2 replicas, CNPG logical)
  Phase 4  Observability             ✅   ← validated LIVE on AKS: lag + CDC + DLT + saga SLI + cross-Kafka tracing E2E
  Phase 5  Progressive delivery      ✅   ← Argo Rollouts validated on AKS: 3-gate ramp + automatic abort
- Phase 6  Chaos + postmortem + demo 🔄   ← 8 async runbooks READY; remaining: Chaos Mesh on AKS + live run + demo
+ Phase 6  Chaos + postmortem + demo 🔄   ← 7/8 chaos PASS live on AKS (06/07); remaining: 07 canary + postmortem + demo
 ```
 
 ## Division of labour
@@ -111,7 +113,7 @@ With the async cutover, the **synchronous** breaker/bulkhead/retry were **retire
 - ✅ **Release rule (async)**: canary/preview **share the consumer group** → the weight governs only HTTP intake;
   the invariant is command/reply schema compatibility between adjacent versions.
 
-## Phase 6 — Chaos + postmortem + demo 🔄 (async runbooks rewritten — EXECUTION remains)
+## Phase 6 — Chaos + postmortem + demo 🔄 (7/8 chaos executed & PASS — 07 + postmortem + demo remain)
 - ✅ **Runbooks rewritten for async** — **8 experiments** (`docs/chaos/`, manifests in `platform/chaos-mesh/`):
   01 payments-latency (a slow consumer = lag + sweeper, not errors — the breaker's replacement under test);
   02 pod-kill inventory (never-oversell under redelivery); 03 node disruption (kill a node NOT holding the Kafka
@@ -119,8 +121,11 @@ With the async cutover, the **synchronous** breaker/bulkhead/retry were **retire
   corruption); 05 CNPG failover (RPO=0 + CDC resumes; PG16 self-healing posture); 06 kill a Kafka Connect worker
   (CDC HA); 07 chaos on the canary → Rollouts auto-abort (links Phase 5 + 6); 08 poison message → DLT (the core
   Pillar-C claim, proven).
-- ⬜ **Live execution on AKS** (team session): run the 8 in order (see `docs/chaos/README.md`), fill the
-  Observation sections, tick the PASS criteria. *(Koisuji will drive this next with the cluster on.)*
+- ✅ **Live execution on AKS (2026-07-06): 7 of 8 run and PASS** (01–06, 08). Each ran one at a time under k6
+  load (see `docs/chaos/README.md`), was adapted to the constrained-pool config (2-instance CNPG, 2-replica
+  Debezium, Kafka co-located), and its report's Observation/verdict is filled with the live results.
+- ⬜ **07 (canary auto-abort)** remains — it needs a rollout in flight, so it runs together with the
+  progressive-delivery demo (there is already a paused canary on `orders` to drive).
 - ⬜ **Blameless postmortem** (candidate: #07 as a "bad deploy") + a **recorded ~5-min demo** (live system,
   dashboards, canary auto-abort, one alert).
 

@@ -189,24 +189,28 @@ Reminder: `az aks stop` at the end of every cluster session (cost; student subsc
 ## 7. Chaos experiments (Pillar C proof)
 
 The eight experiments live as individual reports under [`docs/chaos/`](docs/chaos/) (hypothesis → steady state →
-method → observation → verdict) and are executed on the live cluster with the run commands in
-[`docs/demo-runbook.md`](docs/demo-runbook.md):
+method → observation → verdict) and run on the live cluster with the commands in
+[`docs/demo-runbook.md`](docs/demo-runbook.md). **7 of 8 were executed on the current AKS cluster (2026-07-06)
+and all PASS** — each adapted to the constrained-pool config of §6 (e.g. 2-instance CNPG, 2-replica Debezium,
+Kafka co-located on one node) and re-verified live. **07 (canary auto-abort) runs during a live rollout** and is
+exercised together with the progressive-delivery demo.
 
-| # | Experiment |
-|---|---|
-| 01 | Payments latency injection (async absorbs it as lag, not blocked threads) |
-| 02 | Inventory pod-kill mid-reservation (idempotent reserve; reconciler reclaims holds) |
-| 03 | Node disruption (PDB + topology spread; kill a node NOT holding the Kafka broker majority — see §6) |
-| 04 | Kafka partition (consumer lag drains; no oversell) |
-| 05 | CloudNativePG primary failover (RPO=0 on inventory; connector recreates the slot) |
-| 06 | Kafka Connect / Debezium worker kill (CDC resumes; outbox drains) |
-| 07 | Canary auto-abort (bad AnalysisRun → weight to 0, no human in the loop) |
-| 08 | Poison message → DLT (bounded retry, then park; no head-of-line block) |
+| # | Experiment | Verdict |
+|---|---|---|
+| 01 | Payments latency injection (async absorbs it as lag, not blocked threads) | ✅ PASS |
+| 02 | Inventory pod-kill mid-reservation (idempotent reserve; reconciler reclaims holds) | ✅ PASS |
+| 03 | Node disruption (PDB + topology spread; kill a node NOT holding the Kafka broker majority — see §6) | ✅ PASS |
+| 04 | Kafka partition (consumer lag drains; no oversell) | ✅ PASS |
+| 05 | CloudNativePG primary failover (RPO=0 on inventory; connector recreates the slot) | ✅ PASS |
+| 06 | Kafka Connect / Debezium worker kill (CDC resumes; outbox drains) | ✅ PASS |
+| 07 | Canary auto-abort (bad AnalysisRun → weight to 0, no human in the loop) | ⏳ runs during a live rollout |
+| 08 | Poison message → DLT (bounded retry, then park; no head-of-line block) | ✅ PASS |
 
 ## 8. Docs index (graded deliverables)
 
 - [docs/design.md](docs/design.md) — the detailed design/consistency justification: the numbered decisions with rationale + the full four-pillar treatment (this README's §3–§4 are the overview)
 - [docs/capstone-dod.md](docs/capstone-dod.md) — Definition of Done across the four pillars
+- [docs/slo.md](docs/slo.md) — checkout SLOs/SLIs, error budget, and burn-rate alerting policy
 - [docs/version-compatibility.md](docs/version-compatibility.md) — language/platform/cloud version & compatibility matrix
 - [docs/agent-threat-model.md](docs/agent-threat-model.md) — non-human-actor blast radius
 - [docs/agent-log.md](docs/agent-log.md) — where agent-produced artifacts were wrong and how the team caught them (graded)
@@ -214,7 +218,7 @@ method → observation → verdict) and are executed on the live cluster with th
 - [docs/demo-runbook.md](docs/demo-runbook.md) — start-to-shutdown demo runbook + chaos run commands
 - [docs/postmortem.md](docs/postmortem.md) — blameless postmortem
 - [docs/traccia/FASI_PROGETTO.md](docs/traccia/FASI_PROGETTO.md) — phase-by-phase progress and how the team split the work
+- [docs/NOTES.md](docs/NOTES.md) — student-subscription tradeoffs: what we did under the 3×B2s_v2 / 12-disk ceiling vs. what a real/prod environment would change
 
 > This README is the config-side overview; the detailed decision log + per-pillar rationale live in `docs/design.md`,
 > and the application-side design and booking money path live in the app repo's README.
-</content>

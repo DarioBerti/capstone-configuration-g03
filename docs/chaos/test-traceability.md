@@ -12,6 +12,9 @@ direct counterpart exists.
 
 > Rewritten for the **async saga** (2026-07-02): the sync-era rows mapped breaker/bulkhead/relay tests
 > (`PaymentsCircuitBreakerTest`, `BulkheadIsolationTest`, `OutboxPublisherTest`, …) that were retired with the cutover.
+>
+> **Run status (2026-07-06):** the level-2 chaos runs are executed on AKS — **7 of 8 PASS** (01–06, 08); each
+> report's Observation/verdict carries the live result. **07** (canary auto-abort) runs during a live rollout (Phase 5/6).
 
 ## Map
 
