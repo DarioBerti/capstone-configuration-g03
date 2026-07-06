@@ -6,6 +6,10 @@
 cluster := "eurotransit"
 ctx     := "kind-eurotransit"
 
+# AKS (real cluster) kubeconfig context — Spain: lab_g03_cluster / lab02_g03_group.
+# `az login` on the Spain subscription must be active for the aks-* recipes to authenticate.
+aks_ctx := "cpo_cluster"
+
 # local dev image registry (mirrors ACR locally; see platform/kind-registry/)
 reg_name       := "kind-registry"
 reg_port       := "5001"
@@ -253,21 +257,30 @@ debezium-verify:
 # ── local debugging (run a service in your IDE against the cluster) ─────────
 
 # tunnel a service's CNPG primary DB to localhost + print the creds for your IDE run config.
-# Usage: `just db-forward orders`  (or `just db-forward payments 5433` to pick a local port).
+# Works against EITHER cluster via the `target` arg: `kind` (default) or `aks` (real Spain cluster;
+# needs an active `az login` on the Spain subscription).
+# Usage: `just db-forward orders`            (kind, local :5432)
+#        `just db-forward payments 5433`     (kind, pick a local port)
+#        `just db-forward orders 5432 aks`   (real AKS cluster)
 # Set in IntelliJ: profile `postgres`, then the DB_* env vars printed below. Ctrl-C to stop.
-db-forward service local_port="5432":
+db-forward service local_port="5432" target="kind":
     #!/usr/bin/env bash
     set -euo pipefail
+    case "{{target}}" in
+      kind) context="{{ctx}}" ;;
+      aks)  context="{{aks_ctx}}" ;;
+      *) echo "unknown target '{{target}}' — use 'kind' or 'aks'" >&2; exit 1 ;;
+    esac
     secret="{{service}}-db-app"
-    echo "== {{service}} DB — IntelliJ run config (Active profiles: postgres) =="
+    echo "== {{service}} DB ({{target}}) — IntelliJ run config (Active profiles: postgres) =="
     echo "  DB_HOST = localhost"
     echo "  DB_PORT = {{local_port}}"
-    echo "  DB_NAME = $(kubectl --context {{ctx}} -n eurotransit get secret "$secret" -o jsonpath='{.data.dbname}'   | base64 -d)"
-    echo "  DB_USER = $(kubectl --context {{ctx}} -n eurotransit get secret "$secret" -o jsonpath='{.data.username}' | base64 -d)"
-    echo "  DB_PASS = $(kubectl --context {{ctx}} -n eurotransit get secret "$secret" -o jsonpath='{.data.password}' | base64 -d)"
+    echo "  DB_NAME = $(kubectl --context "$context" -n eurotransit get secret "$secret" -o jsonpath='{.data.dbname}'   | base64 -d)"
+    echo "  DB_USER = $(kubectl --context "$context" -n eurotransit get secret "$secret" -o jsonpath='{.data.username}' | base64 -d)"
+    echo "  DB_PASS = $(kubectl --context "$context" -n eurotransit get secret "$secret" -o jsonpath='{.data.password}' | base64 -d)"
     echo
     echo ">> forwarding svc/{{service}}-db-rw -> localhost:{{local_port}} (Ctrl-C to stop) ..."
-    kubectl --context {{ctx}} -n eurotransit port-forward svc/{{service}}-db-rw {{local_port}}:5432
+    kubectl --context "$context" -n eurotransit port-forward svc/{{service}}-db-rw {{local_port}}:5432
 
 # tunnel the Strimzi Kafka broker to localhost for IDE debugging of event paths.
 # Usage: `just kafka-forward`  then set KAFKA_BOOTSTRAP=localhost:9092 in your run config. Ctrl-C to stop.
@@ -324,15 +337,22 @@ dev-restart:
     done
     echo ">> all app pods rolled to the latest :dev images and Ready."
 
-# background a port-forward for every DB (distinct local ports) + Kafka + Keycloak; Ctrl-C stops them all
-dev-forward-all:
+# background a port-forward for every DB (distinct local ports) + Kafka + Keycloak; Ctrl-C stops them all.
+# Works against EITHER cluster via the `target` arg: `kind` (default) or `aks` (real Spain cluster; needs
+# an active `az login`). Usage: `just dev-forward-all`  or  `just dev-forward-all aks`.
+dev-forward-all target="kind":
     #!/usr/bin/env bash
     set -euo pipefail
+    case "{{target}}" in
+      kind) context="{{ctx}}" ;;
+      aks)  context="{{aks_ctx}}" ;;
+      *) echo "unknown target '{{target}}' — use 'kind' or 'aks'" >&2; exit 1 ;;
+    esac
     pids=()
     cleanup() { echo; echo ">> stopping all port-forwards"; kill "${pids[@]}" 2>/dev/null || true; }
     trap cleanup EXIT INT TERM
     fwd() { # $1=localPort:remotePort  $2=namespace  $3=service
-      kubectl --context {{ctx}} -n "$2" port-forward --address 0.0.0.0 "svc/$3" "$1" >/dev/null 2>&1 &
+      kubectl --context "$context" -n "$2" port-forward --address 0.0.0.0 "svc/$3" "$1" >/dev/null 2>&1 &
       pids+=($!); echo "  $3 -> localhost:${1%%:*}"
     }
     fwd 5432:5432 eurotransit catalog-db-rw
@@ -347,11 +367,36 @@ dev-forward-all:
     echo ">> all forwards up. Leave this tab running; Ctrl-C to stop them all."
     wait
 
-# print the IntelliJ env block per service (Active profiles: postgres); live-reads passwords
-dev-env:
+# print user / dbname / password (+ the local port dev-forward-all binds) for EVERY forwarded DB, as a
+# table — the values to paste into an IntelliJ Database datasource. `notifications` has no DB, so it's omitted.
+# Match the cluster you forwarded with: `just dev-creds` (kind, default) or `just dev-creds aks`.
+dev-creds target="kind":
     #!/usr/bin/env bash
     set -euo pipefail
-    pw() { kubectl --context {{ctx}} -n eurotransit get secret "$1-db-app" -o jsonpath='{.data.password}' | base64 -d; }
+    case "{{target}}" in
+      kind) context="{{ctx}}" ;;
+      aks)  context="{{aks_ctx}}" ;;
+      *) echo "unknown target '{{target}}' — use 'kind' or 'aks'" >&2; exit 1 ;;
+    esac
+    get() { kubectl --context "$context" -n eurotransit get secret "$1-db-app" -o jsonpath="{.data.$2}" | base64 -d; }
+    echo "== eurotransit DB credentials ({{target}}) — host=localhost, PORT = the dev-forward-all local port =="
+    printf "%-11s %-5s %-13s %-10s %s\n" SERVICE PORT DBNAME USER PASSWORD
+    for row in "catalog 5432" "orders 5433" "inventory 5434" "payments 5435" "users 5436"; do
+      set -- $row
+      printf "%-11s %-5s %-13s %-10s %s\n" "$1" "$2" "$(get "$1" dbname)" "$(get "$1" username)" "$(get "$1" password)"
+    done
+
+# print the IntelliJ env block per service (Active profiles: postgres); live-reads passwords.
+# Match the cluster you forwarded with: `just dev-env` (kind, default) or `just dev-env aks`.
+dev-env target="kind":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{target}}" in
+      kind) context="{{ctx}}" ;;
+      aks)  context="{{aks_ctx}}" ;;
+      *) echo "unknown target '{{target}}' — use 'kind' or 'aks'" >&2; exit 1 ;;
+    esac
+    pw() { kubectl --context "$context" -n eurotransit get secret "$1-db-app" -o jsonpath='{.data.password}' | base64 -d; }
     # OIDC for the SECURED resource servers (catalog/orders/inventory/payments/users + notifications' SSE
     # stream). The token's `iss` is the operator's fixed hostname (https://auth.localhost); JWKS is fetched
     # from the :8180 Keycloak forward set up by dev-forward-all.
@@ -378,10 +423,16 @@ dev-env:
     echo "SERVER_PORT=8084;KAFKA_BOOTSTRAP=localhost:9092;$kc"
 
 # write one NEWLINE-format .env per service to services/<svc>/.env (gitignored). Point each IDE run config at it.
-dev-env-files:
+# Match the cluster you forwarded with: `just dev-env-files` (kind, default) or `just dev-env-files aks`.
+dev-env-files target="kind":
     #!/usr/bin/env bash
     set -euo pipefail
-    pw() { kubectl --context {{ctx}} -n eurotransit get secret "$1-db-app" -o jsonpath='{.data.password}' | base64 -d; }
+    case "{{target}}" in
+      kind) context="{{ctx}}" ;;
+      aks)  context="{{aks_ctx}}" ;;
+      *) echo "unknown target '{{target}}' — use 'kind' or 'aks'" >&2; exit 1 ;;
+    esac
+    pw() { kubectl --context "$context" -n eurotransit get secret "$1-db-app" -o jsonpath='{.data.password}' | base64 -d; }
     emit() { # $1=service, rest=KEY=VALUE lines
       local svc="$1"; shift
       local f="{{app_repo}}/services/$svc/.env"
