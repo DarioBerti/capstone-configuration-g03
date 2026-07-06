@@ -51,7 +51,7 @@ frontend:
   exposeInternalDebugRoutes: false
   image:
     repository: labg03clusterregistry.azurecr.io/eurotransit/frontend
-    tag: bd642f5
+    tag: b268718
     pullPolicy: IfNotPresent
   replicaCount: 1
   # cluster Service port (nginx listens on 80 inside the pod)
@@ -138,7 +138,7 @@ services:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
       #tag: 4407f01 # old to perform rollout
-      tag: bd642f5
+      tag: b268718
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
@@ -217,7 +217,7 @@ services:
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: 7efa486
+      tag: b268718
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
