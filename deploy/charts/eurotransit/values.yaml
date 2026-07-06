@@ -156,6 +156,15 @@ services:
     # replies, so it needs no sibling base-URLs and no service-token client: the former oidcClient (orders-svc /
     # orders-oidc) and the INVENTORY/PAYMENTS_BASE_URL env were removed with the sync→async cutover. It stays a
     # resource server (secured) to validate the inbound user JWT on POST /api/orders.
+    # Housekeeping knob: the abandoned-DRAFT cleanup sweeper (AbandonedDraftSweeper), tunable HERE without
+    # rebuilding the image — Spring relaxed binding maps these to app.draft-sweeper.*. A change rolls the pod via
+    # Argo, which re-reads them at startup (@Scheduled/@Value bind once per boot — there is no hot reload). Keep
+    # poll-interval << max-age: @Scheduled fixedDelay resets on every restart, so a multi-day interval could
+    # otherwise never fire on a service that redeploys often (canary). Set ENABLED=false to turn it off entirely.
+    extraEnv:
+      APP_DRAFT_SWEEPER_ENABLED: "true"
+      APP_DRAFT_SWEEPER_POLL_INTERVAL: "PT10S"
+      APP_DRAFT_SWEEPER_MAX_AGE: "P3D"
     # Public sync entry of the money path: scale out under load instead of queueing to collapse (works together with load shedding / 429, Pillar C)
     # maxReplicas capped 4->3 (05/07): on the memory-tight pool a cold-start CPU spike ballooned orders to 4 pods
     # (~4x448Mi) with no lasting need (idle CPU ~39%); 3 keeps burst headroom while bounding the memory footprint.
