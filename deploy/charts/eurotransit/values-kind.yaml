@@ -72,6 +72,11 @@ paypal:
       expiry: "2031-07"            # PayPal wants YYYY-MM (any future month)
       cvv: "123"
 
+# Render the plaintext price-quote signing key on kind (no kubeseal). The DEV key in values.yaml matches
+# global.pricing.publicKey, so catalog signs and orders verifies with a matching pair. Prod uses a SealedSecret.
+priceQuote:
+  devSecrets: true
+
 # Use locally-built images from the kind local registry (localhost:5001) instead of ACR.
 # Build + push them with `just images-kind`. Base values.yaml keeps the ACR repository for prod.
 # pullPolicy: Always so a rebuilt :dev image is re-pulled on the next pod restart (dev loop).
