@@ -14,6 +14,11 @@ metadata:
     # The issuer name is environment-specific: "letsencrypt-prod" on the real cluster,
     # "selfsigned" on local kind (set via global.clusterIssuer in values.yaml / values-kind.yaml).
     cert-manager.io/cluster-issuer: {{ .Values.global.clusterIssuer }}
+    {{- if .Values.global.securityHeaders.enabled }}
+    # Attach the security-headers Middleware (templates/security-headers.yaml) to every router this Ingress
+    # generates, so the SPA and all /api/* paths get HSTS/CSP-Report-Only/frame/nosniff/referrer uniformly.
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-security-headers@kubernetescrd
+    {{- end }}
 spec:
   # route through the Traefik ingress controller (installed once as a platform component)
   ingressClassName: traefik

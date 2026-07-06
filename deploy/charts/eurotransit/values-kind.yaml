@@ -20,6 +20,11 @@ global:
     issuer: https://auth.localhost/realms/eurotransit
     jwkSetUri: http://keycloak-service.eurotransit.svc:8080/realms/eurotransit/protocol/openid-connect/certs
     tokenUri: http://keycloak-service.eurotransit.svc:8080/realms/eurotransit/protocol/openid-connect/token
+  # Self-signed TLS on kind: keep HSTS OFF (stsSeconds 0) so a cert warning stays bypassable — HSTS would make
+  # https://*.localhost cert errors non-recoverable. Keycloak is browser-reached at auth.localhost (CSP origin).
+  securityHeaders:
+    stsSeconds: 0
+    keycloakOrigin: https://auth.localhost
 
 # Local Keycloak: render plaintext dev secrets (no kubeseal on a laptop) and serve the login UI on the
 # kind ingress host. Prod keeps devSecrets=false and uses committed SealedSecrets.

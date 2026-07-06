@@ -70,6 +70,12 @@ spec:
   routes:
     - match: Host(`{{ $.Values.global.domain }}`) && PathPrefix(`/api/{{ $name }}`)
       kind: Rule
+      {{- if $.Values.global.securityHeaders.enabled }}
+      # same hardening headers as the standard Ingress (security-headers.yaml): the canary /api/<svc> route
+      # bypasses that Ingress, so attach the Middleware here too or its responses would miss the headers.
+      middlewares:
+        - name: security-headers
+      {{- end }}
       services:
         - name: {{ $name }}-weighted
           kind: TraefikService

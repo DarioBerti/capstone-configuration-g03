@@ -1,0 +1,40 @@
+{{- /*
+Browser security response headers for the storefront (frontend-security hardening).
+
+ONE Traefik Middleware, attached to BOTH the app Ingress (ingress.yaml) and the canary /api/orders IngressRoute
+(progressive-delivery.yaml), so every browser-facing response — the SPA HTML, the API JSON, the SSE stream —
+carries the same hardening headers, in canary and blue/green alike.
+
+Enforced (always safe, never breaks the app):
+  - HSTS: PROD ONLY. stsSeconds comes from values; kind sets it to 0 (values-kind.yaml) because a self-signed
+    cert + HSTS would make the cert error non-bypassable and lock the browser out of https://*.localhost.
+  - X-Frame-Options: SAMEORIGIN (NOT DENY) + CSP frame-ancestors 'self': block cross-origin framing
+    (clickjacking) while still letting the SPA frame its OWN /silent-check-sso.html for the Keycloak silent SSO.
+  - X-Content-Type-Options: nosniff, Referrer-Policy, Permissions-Policy (unused browser features off).
+
+CSP is shipped as Content-Security-Policy-REPORT-ONLY — the slide-recommended rollout: it reports violations
+without enforcing, so it cannot break anything. A strict enforced CSP would otherwise block the inline <script>
+in silent-check-sso.html and the Vite/Tailwind inline styles. To switch to enforcing later: rename the header to
+Content-Security-Policy AND allow the silent-sso inline script (add its sha256 hash to script-src, or serve it
+with a per-request nonce). connect-src / frame-src include the browser-facing Keycloak origin for the OAuth2/PKCE
+token exchange + JWKS.
+*/ -}}
+{{- if .Values.global.securityHeaders.enabled }}
+{{- $kc := .Values.global.securityHeaders.keycloakOrigin }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: security-headers
+  labels:
+    {{- include "eurotransit.labels" (dict "svc" "security-headers" "root" $) | nindent 4 }}
+spec:
+  headers:
+    stsSeconds: {{ .Values.global.securityHeaders.stsSeconds | int64 }}
+    stsIncludeSubdomains: true
+    contentTypeNosniff: true
+    customFrameOptionsValue: SAMEORIGIN
+    referrerPolicy: strict-origin-when-cross-origin
+    customResponseHeaders:
+      Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=()"
+      Content-Security-Policy-Report-Only: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; frame-src 'self' {{ $kc }}; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' {{ $kc }}"
+{{- end }}

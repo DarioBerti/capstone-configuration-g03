@@ -39,6 +39,14 @@ global:
   # replace BOTH halves together for a real deployment (keep them a matching pair or every add-leg 400s).
   pricing:
     publicKey: '{"kty":"EC","crv":"P-256","kid":"price-quote-dev","x":"88QMkhVI-Xygzue616voDrIHFU9DZrxo91Np99RGL8I","y":"yE9kgtizYUeBDJCYNttyrHhAi5zWukU85bIHKr4CIc0","alg":"ES256"}'
+  # Browser security response headers for the storefront (templates/security-headers.yaml -> Traefik Middleware,
+  # attached to the app Ingress + the canary orders IngressRoute). HSTS is PROD-ONLY via stsSeconds; kind sets it
+  # to 0 (values-kind.yaml) because a self-signed cert + HSTS locks the browser out of https://*.localhost.
+  # keycloakOrigin is the BROWSER-FACING Keycloak host, allowed in the CSP connect-src/frame-src for OAuth2/PKCE.
+  securityHeaders:
+    enabled: true
+    stsSeconds: 31536000
+    keycloakOrigin: https://auth.g03.cpo2026.it
 # The SPA storefront, hosted IN-CLUSTER (nginx serving the Vite build) as the PRODUCTION frontend. When
 # enabled, the ingress serves the SPA at "/" and adds ONLY the public routes it needs: the secured
 # notifications SSE stream and the narrow /api/inventory/availability read (Payments + the broad Inventory
