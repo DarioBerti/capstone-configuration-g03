@@ -1,21 +1,32 @@
 # Chaos experiment 07 — degrade the CANARY during a rollout -> Argo Rollouts auto-abort
-# (runbook: docs/chaos/07-canary-auto-abort.md — Fase 5 ✕ Fase 6).
+# (runbook: docs/chaos/07-canary-auto-abort.md — Fase 5 x Fase 6).
 #
-# Goal: prove the canary analysis aborts a bad release with NO human in the loop. We delay the canary pods'
-# path to orders-db by 2 s: the POST /api/orders ack (whose write path crosses the DB) blows the 300 ms p99
-# gate of the AnalysisTemplate; after `failureLimit` (3) failed measurements (~90 s) the controller aborts —
-# TraefikService weights snap back to 100/0 stable, canary drains. Stable pods are NEVER selected.
+# Goal: prove the canary analysis aborts a bad release with NO human in the loop. We delay ALL egress from the
+# canary pods by 400 ms: the POST /api/orders ack (whose write path crosses orders-db) blows the 300 ms p99 gate
+# of the AnalysisTemplate; after failureLimit (3) failed measurements (~90 s) the controller aborts —
+# TraefikService weights snap back to 100/0 stable, the canary drains. Stable pods are NEVER selected.
 #
-# The ONLY label distinguishing canary from stable pods is the canary ReplicaSet's pod-template hash, which
-# changes per release — grab it while the ramp is at a low weight and substitute the placeholder:
-#   HASH=$(kubectl -n eurotransit get rs -l app.kubernetes.io/name=orders \
-#     -o jsonpath='{range .items[*]}{.metadata.labels.rollouts-pod-template-hash} {.spec.replicas}{"\n"}{end}' \
-#     | awk '$2>0' | tail -1 | cut -d' ' -f1)
+# WHY "delay ALL egress" and not a `target` on orders-db (finding 2026-07-06, see agent-log): a NetworkChaos
+# `target` by the orders-db pod label does NOT intercept the DB traffic, because the app reaches the DB via the
+# `orders-db-rw` ClusterIP Service — the netem rule (matching pod IPs) misses the ClusterIP-routed packets, so
+# the delay applied to nothing (canary p99 stayed ~26 ms, the gate never tripped, the canary auto-promoted twice).
+# Dropping the target and delaying ALL canary egress removes the destination match entirely -> the DB write is
+# reliably slowed. (Kafka/OTLP egress is also slowed, harmless: well within the consumer session timeout.)
+#
+# WHY 400 ms (not the old 1200 ms): once the delay ACTUALLY applies it also hits the readiness `db` health check.
+# The readiness probe has timeoutSeconds=1, so a >=1 s DB check would fail and, after failureThreshold=3 (~30 s),
+# abort via ProgressDeadlineExceeded BEFORE the p99 gate — the wrong mechanism to show. 400 ms blows the 300 ms
+# intake-ack p99 gate while the readiness DB check (~0.4-0.8 s) stays under its 1 s timeout, so the ANALYSIS gate
+# is the trigger.
+#
+# Grab the canary ReplicaSet's pod-template hash while the ramp is at a low weight and substitute the placeholder:
+#   HASH=$(kubectl -n eurotransit get rollout orders -o jsonpath='{.status.currentPodHash}')
 #   sed "s/REPLACE_WITH_CANARY_HASH/$HASH/" platform/chaos-mesh/07-canary-auto-abort.yaml | kubectl apply -f -
 # Cleanup after the abort:
 #   kubectl -n eurotransit delete networkchaos canary-db-latency
 #
-# Prereqs: Fase-5 Rollouts merged + analysis enabled (Prometheus present -> AKS, or kind + kube-prometheus).
+# Prereqs: Fase-5 Rollouts merged + analysis enabled (Prometheus present -> AKS); generate intake traffic during
+# the ramp so the canary p99 has samples (else the NaN-proof gate passes trivially and the canary promotes).
 apiVersion: chaos-mesh.org/v1alpha1
 kind: NetworkChaos
 metadata:
@@ -30,18 +41,12 @@ spec:
       app.kubernetes.io/name: orders
       # the canary ReplicaSet's hash — substitute per release (see header)
       rollouts-pod-template-hash: REPLACE_WITH_CANARY_HASH
-  # delay only the canary -> orders-db leg: the intake ack path crosses the DB, so the canary's p99 blows
-  # the analysis gate while its Kafka consumption merely slows (one variable, decisive signal)
+  # delay ALL egress from the canary (no `target`: a pod-label target misses ClusterIP-routed DB traffic — see
+  # header). The intake ack's DB write is slowed -> the canary p99 blows the analysis gate; stable is untouched.
   direction: to
-  target:
-    mode: all
-    selector:
-      namespaces: [eurotransit]
-      labelSelectors:
-        cnpg.io/cluster: orders-db
   delay:
-    latency: "1200ms"
-    jitter: "100ms"
+    latency: "400ms"
+    jitter: "40ms"
     correlation: "0"
   # longer than failureLimit x interval (3 x 30 s) + margin; auto-reverts even if the delete is forgotten
   duration: "8m"

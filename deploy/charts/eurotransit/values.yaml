@@ -137,8 +137,8 @@ services:
   orders:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/orders
-      #tag: aa5512a
-      tag: bd642f5
+      tag: 4407f01 # old to perform rollout
+      #tag: bd642f5
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
