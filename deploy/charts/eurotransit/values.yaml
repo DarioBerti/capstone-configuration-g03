@@ -257,6 +257,12 @@ services:
     # relays saga updates to the browser -> validate the caller's Keycloak token (lazy decoder, so readiness
     # never couples to Keycloak). Still a pure sink: it never calls the money path.
     secured: true
+    # The SSE stream authorizes the caller by asking Orders "do you own this order?" (the ONE remaining sync
+    # cross-service HTTP call — see notifications OrdersClient). Without this the app falls back to its dev
+    # default http://localhost:8080 and the check hits notifications ITSELF -> 404 -> every stream 404s. Point
+    # it at the in-cluster Orders Service (its stable ClusterIP even under the canary rollout).
+    extraEnv:
+      ORDERS_BASE_URL: http://orders:8080
     # Allowed to fail entirely (graceful degradation): one replica, no HPA, no PDB. Single-replica is also what
     # lets the SSE hub hold every connection AND consume every event in one process — no cross-pod fan-out.
     hpa:
