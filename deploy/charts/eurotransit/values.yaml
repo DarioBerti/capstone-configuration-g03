@@ -59,7 +59,7 @@ frontend:
   exposeInternalDebugRoutes: false
   image:
     repository: labg03clusterregistry.azurecr.io/eurotransit/frontend
-    tag: "03520c7"
+    tag: "3309ecb"
     pullPolicy: IfNotPresent
   replicaCount: 1
   # cluster Service port (nginx listens on 80 inside the pod)
@@ -118,7 +118,7 @@ services:
     image:
       # full image reference; "tag" is the only field CI rewrites (to the commit SHA)
       repository: labg03clusterregistry.azurecr.io/eurotransit/catalog
-      tag: 13b3251
+      tag: 3309ecb
       # IfNotPresent = don't re-pull if the tag is already cached on the node
       pullPolicy: IfNotPresent
     # baseline replica count (also the HPA floor / PDB reference)
@@ -230,7 +230,7 @@ services:
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: b268718
+      tag: 3309ecb
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
