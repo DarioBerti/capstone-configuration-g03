@@ -235,6 +235,18 @@ spec:
   partitions: 3
   replicas: 1
 ---
+# Read-side (off the money path): Inventory (outbox) -> Catalog's availability projection. Advisory only.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: seat-availability
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
@@ -261,6 +273,18 @@ apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: payments-dlt
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 1
+---
+# Catalog's DLT for the seat-availability projection listener
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: catalog-dlt
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit

@@ -173,6 +173,21 @@ spec:
   partitions: 3
   replicas: 3
 ---
+# Read-side (off the money path): Inventory emits a seat-count change via its outbox whenever `available`
+# moves (reserve success, release, expiry, sweep); Catalog consumes it into a local advisory availability
+# projection so browse can hide sold-out trips. Keyed by tripCode for per-trip ordering. Advisory only —
+# a lost/reordered event at worst makes a browse count briefly stale, never oversells.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: seat-availability
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
 # --- Dead-letter topics: one per consuming service. A poison/exhausted-retry message is parked here by
 # the consumer's DefaultErrorHandler + DeadLetterPublishingRecoverer so it never blocks the partition.
 apiVersion: kafka.strimzi.io/v1
@@ -201,6 +216,18 @@ apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: payments-dlt
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: eurotransit
+spec:
+  partitions: 3
+  replicas: 3
+---
+# Catalog's DLT for the seat-availability projection listener (parked by its DeadLetterPublishingRecoverer)
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: catalog-dlt
   namespace: kafka
   labels:
     strimzi.io/cluster: eurotransit

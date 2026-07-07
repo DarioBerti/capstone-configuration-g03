@@ -134,8 +134,9 @@ services:
     signsPriceQuotes: true
     # NOT on the money path -> no PDB, no topology spread, looser SLOs
     criticalPath: false
-    # does not produce/consume Kafka events -> no KAFKA_BOOTSTRAP injected
-    usesKafka: false
+    # Consumes Inventory's seat-availability events (read-side availability projection, off the money path)
+    # -> inject KAFKA_BOOTSTRAP. Consume-only: Catalog never produces domain events and never blocks checkout.
+    usesKafka: true
     # Public read endpoint: bursty browse traffic is the natural HPA case
     hpa:
       enabled: true
