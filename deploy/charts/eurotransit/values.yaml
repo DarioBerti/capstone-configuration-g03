@@ -230,7 +230,7 @@ services:
   inventory:
     image:
       repository: labg03clusterregistry.azurecr.io/eurotransit/inventory
-      tag: 3309ecb
+      tag: c9b530a
       pullPolicy: IfNotPresent
     replicaCount: 2
     port: 8080
