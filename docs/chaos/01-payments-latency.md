@@ -1,42 +1,21 @@
-# Chaos 01 — Latency into Payments (a slow downstream never reaches the user)
+# Chaos 01 — Latency into Payments
 
-**Proves (Pillar C, async form):** a slow Payments consumer is absorbed as **saga latency**, not a user-facing
-failure. The intake ack SLO stays green because the slow step is **behind Kafka**, not on the request thread.
-This is the async replacement for the retired Orders→Payments circuit breaker — and it does the job *better*
-(the user sees nothing).
+**What:** inject 3s of network delay (both directions) between Payments and the Kafka brokers for 5
+minutes. Nothing else is touched. Proves a slow downstream never reaches the user — the slow step is
+behind Kafka, not on the request thread.
 
-**Run:** 2026-07-06, live on AKS, Chaos Mesh `NetworkChaos`. *Config adjustment: none (network delay, not pods).*
-
-## Steady state (before)
-- Intake ack fast; catalog browse ~0.15 s; orders reach terminal in ~5 s; consumer lag ~0; DLTs empty.
-
-## The one fault injected
+Run 2026-07-06 on AKS:
 ```bash
-kubectl apply -f platform/chaos-mesh/01-payments-latency.yaml   # NetworkChaos delay 3s ±200ms, BOTH directions,
-                                                                 # payments ↔ Kafka brokers only, 5m (auto-reverts)
+kubectl apply -f platform/chaos-mesh/01-payments-latency.yaml
 ```
-Only the Payments↔Kafka path is delayed — Payments' DB and every other service are untouched (one variable).
 
-## What we observed (during the 3 s latency)
-| Signal | Value | Meaning |
-|---|---|---|
-| `POST /api/orders` (create draft) | **0.22 s** | intake unaffected (doesn't touch Payments) |
-| `POST /{id}/pay` **ack** | **0.15 s** | 202 returns immediately — the request thread never waits on the slow step |
-| catalog browse | **0.21 s** | different service/DB → completely unaffected |
-| add-leg → leg | RESERVED, 0.28 s | Inventory not delayed |
-| order → terminal | **CONFIRMED after 21 s** (vs ~5 s) | the delay surfaced as **saga slowness**, and the order STILL confirmed |
+## Results — ✅ PASS
 
-So the downstream failure showed up as extra async latency (payments +3 s/hop), **never** as a user-visible error
-or a lost order. It confirmed inside the 2-minute sweeper deadline, so no re-drive was even needed; anything that
-did cross PT2M would be re-driven by `OrderTimeoutSweeper` (idempotent — `UNIQUE(order_id)` → no double-charge).
+- Intake unaffected: create 0.22s, pay ack 0.15s (202 returns immediately), browse 0.21s.
+- The order still reached **CONFIRMED — in 21s instead of ~5s**. The fault surfaced as saga slowness,
+  never as a user-visible error or a lost order.
+- No DLT entries (latency is not an error). If an order crossed the 2-minute deadline, the timeout
+  sweeper would re-drive it idempotently (no double-charge).
 
-## Verdict
-✅ **PASS.** Intake ack + catalog stayed fast (well within the 300 ms SLO) throughout; the order confirmed
-(slower but correct); no lost order, no double-charge, no DLT (latency is not an error → nothing poisoned).
-Hypothesis held; nothing changed.
-
-## For the oral (one breath)
-> "We add 3 seconds of latency to Payments. The customer's request still returns in milliseconds and browsing is
-> untouched — the slow step is behind Kafka, not on the request thread. The order just confirms a bit later, and
-> if it ever crossed our 2-minute deadline the sweeper would re-drive it idempotently. Temporal decoupling
-> contains the failure instead of propagating it — the async replacement for the circuit breaker."
+**Takeaway:** temporal decoupling contains the failure — the async replacement for the circuit breaker,
+and the user sees nothing.

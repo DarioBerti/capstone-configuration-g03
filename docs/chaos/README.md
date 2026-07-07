@@ -1,46 +1,47 @@
-# Chaos-experiment reports
+# Chaos experiments
 
-One report per experiment. Each follows the scientific method from the resilience lecture.
-Manifests live in `platform/chaos-mesh/`.
+One report per experiment; manifests in `platform/chaos-mesh/`. All run live on AKS (2026-07-05/06),
+all **PASS**. Run order for a live session: 08 (cheapest) → 02 → 01 → 06 → 04 → 05 → 03 → 07.
 
-> **Before a Chaos Mesh session (this cluster):** the Chaos Mesh **control plane is scaled to 0** by default to
-> save memory on the tight 3× B2s_v2 pool (only the `chaos-daemon` DaemonSet stays). Any chaos CR then fails with
-> *"no endpoints available for service chaos-mesh-controller-manager"*. Scale it up first, wait ~30 s for the
-> webhook cert, run the experiments, then scale it back to 0:
+> **Before a Chaos Mesh session:** the control plane is scaled to 0 by default (memory). Scale it up
+> first, back to 0 after (08 doesn't need it):
 > ```bash
-> kubectl -n chaos-mesh scale deploy chaos-controller-manager --replicas=1   # before
+> kubectl -n chaos-mesh scale deploy chaos-controller-manager --replicas=1   # before (wait ~30s)
 > kubectl -n chaos-mesh scale deploy chaos-controller-manager --replicas=0   # after
 > ```
-> (Experiment 08 is the exception — it needs no Chaos Mesh, just a produced message.)
 
-Report template (`NN-name.md`):
+**01 — Latency into Payments.** 3s of network delay between Payments and Kafka. The user never sees it:
+intake stays at ~0.2s, the order just confirms later (21s instead of 5s). A slow downstream becomes saga
+latency, not an error — the async replacement for the circuit breaker.
 
-```
-# Experiment NN — <title>
+**02 — Inventory pod-kill mid-reservation.** Kill one of two Inventory replicas while a booking is in
+flight. The booking still confirms and the seat count is exact (75 → 74): the unacked command is
+redelivered to the survivor, and idempotency makes the replay harmless. Never-oversell held.
 
-- Steady state (SLIs): <the metrics that define "healthy", with values>
-- Hypothesis: <what we expect to remain true under the failure>
-- Blast radius / one failure injected: <exactly one variable>
-- Method: <Chaos Mesh manifest, duration, load applied>
+**03 — Node drain.** Drain a node (the one without the Kafka broker majority). PDBs refuse to evict the
+last DB replica, money-path services never drop to 0 Ready, and PriorityClasses shed only non-critical
+pods. Honest caveat: 3 small nodes can't host everything on 2, so some pods stay Pending until the node
+returns — then full recovery.
 
-## Observation
-<what our OWN dashboards/traces showed — screenshots/links>
+**04 — Kafka partition (the central one).** Cut Orders off from Kafka for ~3 minutes. The intake keeps
+accepting durably (the row is committed in Postgres), the saga freezes but corrupts nothing; on heal the
+backlog drains and the order confirms in seconds. A Kafka outage is a delay, never a loss.
 
-## Conclusion
-- Hypothesis held? yes/no
-- What we changed if it didn't:
-```
+**05 — Postgres primary failover.** Kill the inventory-db primary. The standby is promoted in ~12s and
+no committed reservation is lost (**RPO=0**, synchronous replication); writes block ~1 min until the
+killed pod rejoins (the 2-instance consistency-over-availability tradeoff). The Debezium CDC recreates
+its slot on the new primary by itself.
 
-The suite (rewritten for the **async saga**, 2026-07-02 — the sync-era hypotheses named the retired
-breaker/relay; 1–5 are the capstone minimum, 6–8 cover what the async architecture newly depends on):
-1. `01-payments-latency.md` — a slow consumer never reaches the user (lag + sweeper, not errors).
-2. `02-inventory-podkill.md` — never-oversell under kill + at-least-once redelivery.
-3. `03-node-disruption.md` — PDBs + topology spread keep the money path available.
-4. `04-kafka-partition.md` — **the central one**: a Kafka outage delays the saga, never corrupts it.
-5. `05-pg-failover.md` — RPO=0 **and the Debezium CDC resumes** (slot vs failover).
-6. `06-connect-worker-kill.md` — the CDC (now the only outbox→Kafka path) is HA across 2 workers.
-7. `07-canary-auto-abort.md` — chaos on the canary → Argo Rollouts aborts on the SLO gates (Fase 5 ✕ 6).
-8. `08-poison-message-dlt.md` — bounded retry → per-service DLT; the partition is never head-of-line blocked.
+**06 — Kafka Connect worker kill.** Kill one of two Debezium workers — the only outbox→Kafka path. The
+surviving worker keeps all connectors RUNNING, the CDC pauses seconds at most, the order confirms.
+Zero loss by construction (slot position in Postgres, offsets in Kafka).
 
-Run order for the live session: 08 (cheapest) → 02 → 01 → 06 → 04 → 05 → 03 → 07 (needs a rollout in
-flight; it is also the postmortem/demo candidate). One experiment at a time, k6 load always on.
+**07 — Chaos on the canary → auto-abort.** During a real release ramp at 25%, delay all canary egress by
+400ms. Only the p99 gate fails (success rate stays 1.0), and after 4 bad measurements Argo Rollouts
+aborts the release **on its own** — weights snap to 100% stable, which never suffered. Bonus finding:
+the first injection silently did nothing (pod-label target vs ClusterIP routing) and the canary
+auto-promoted twice — "chaos injected" ≠ "chaos effective".
+
+**08 — Poison message → DLT.** Produce a non-JSON record on `reserve-seats`. Bounded retry (3×500ms),
+then quarantine in `inventory-dlt` with full diagnostics; no crash-loop, and the very next order
+confirms — the partition is never head-of-line blocked.

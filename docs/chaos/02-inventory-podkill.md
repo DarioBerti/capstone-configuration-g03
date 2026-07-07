@@ -1,41 +1,19 @@
-# Chaos 02 — Pod-kill on Inventory mid-reservation (never-oversell survives)
+# Chaos 02 — Inventory pod-kill mid-reservation
 
-**Proves (Pillar B):** killing an Inventory pod while it is reserving seats cannot oversell and cannot lose an
-order. This is the never-oversell invariant under a real crash + at-least-once redelivery.
+**What:** kill one of the two Inventory replicas while a booking is reserving seats. Proves
+never-oversell survives a real crash + at-least-once redelivery.
 
-**Run:** 2026-07-06, live on AKS, Chaos Mesh `PodChaos`. *Config adjustment: inventory runs **2** replicas → kill
-**one** (`mode: one`) so the surviving replica keeps serving — we test convergence, not an outage.*
-
-> **Chaos-session prerequisite (this cluster):** Chaos Mesh's control plane is scaled to **0** by default to save
-> memory on the tight student pool. Scale it up first: `kubectl -n chaos-mesh scale deploy chaos-controller-manager
-> --replicas=1` (wait ~30s for the webhook cert), then scale back to 0 when done.
-
-## Steady state (before)
-- FR9612 `available`: **75** · inventory: **2/2 Running**
-
-## The one fault injected
+Run 2026-07-06 on AKS:
 ```bash
-kubectl apply -f platform/chaos-mesh/02-inventory-podkill.yaml   # PodChaos pod-kill, mode: one, selector inventory
+kubectl apply -f platform/chaos-mesh/02-inventory-podkill.yaml
 ```
-It killed replica `inventory-…-gnkgd` (confirmed in the PodChaos record) while a booking was in flight.
 
-## What we observed
-- The Deployment **immediately created a replacement** pod; the **surviving replica `…zrj9c` kept serving**
-  throughout — no outage.
-- The booking placed **during the kill** reached **CONFIRMED** (leg → RESERVED → pay → CONFIRMED). The order was
-  **not lost**: offsets commit only on a clean handler return (`enable-auto-commit=false`), so a command killed
-  mid-`reserve-seats` was never acked and Kafka **redelivered** it to the survivor; idempotent handlers +
-  `UNIQUE(order_id, trip_code)` make a redelivery a harmless replay.
-- **Seat arithmetic exact:** `available` **75 → 74** (−1 for one CONFIRMED qty 1). Never < 0 → **never-oversell
-  held**; no double-decrement, no lost decrement.
-- **No crash-loop**; inventory recovered to 2/2.
+## Results — ✅ PASS
 
-## Verdict
-✅ **PASS.** Never-oversell held with exact seat arithmetic, the order confirmed straight through the kill, no
-double-charge, and Inventory self-recovered. Hypothesis held; nothing changed.
+- The booking placed during the kill reached **CONFIRMED**: the half-processed command was never acked
+  (offsets commit only on a clean handler return), so Kafka redelivered it to the surviving replica.
+- **Seat arithmetic exact: 75 → 74** — the redelivery was a harmless replay thanks to idempotent
+  handlers + `UNIQUE(order_id, trip_code)`. No double-decrement, no lost decrement, never < 0.
+- No outage (the survivor kept serving), no crash-loop; back to 2/2 on its own.
 
-## For the oral (one breath)
-> "We kill an Inventory pod mid-reservation. The order still confirms and the seat count is exact — because
-> offsets commit only on a clean handler return (a half-done command is redelivered to the surviving replica),
-> and the atomic conditional decrement + `UNIQUE(order_id, trip_code)` make the redelivery a no-op replay.
-> At-least-once + idempotency = exactly one reservation per order."
+**Takeaway:** at-least-once + idempotency = exactly one reservation per order, even through a crash.

@@ -1,44 +1,28 @@
-# Agent threat model — the coding agent as a non-human actor
+# Agent threat model
 
 > Required by the capstone: reason about the blast radius of a coding agent inside our delivery loop.
-
-## Where the agent sits
-
-A coding agent can write code and manifests and open pull requests against **both** repos. The configuration
-repo is reconciled by Argo CD, so anything merged there reaches the cluster within one sync interval. That puts
-the agent **inside the control loop**: a bad *merged* change is a bad *deployment*.
 
 ## What the agent can and cannot do (least privilege)
 
 | The agent has | The agent does NOT have |
 |---|---|
-| the ability to propose branches / PRs (Git only) | any cluster credentials or kubeconfig |
-| read access to both repos | registry push creds (`ACR_*`) or the `CONFIG_REPO_PAT` |
-| — | write access to `main` (branch protection blocks direct pushes) |
+| read/write access to a local clone of both repos | any cluster credentials or kubeconfig |
+| the ability to propose branches / PRs (Git only) | registry push creds (`ACR_*`) or the `CONFIG_REPO_PAT`: those live only as GitHub Actions secrets in the application repo |
 
-Same principle as CI: the agent influences the cluster **only** through Git, and only after a gate we control.
-The push credentials and the PAT live solely in GitHub Actions secrets, used *after* a human-reviewed merge.
+Direct pushes to `main` are not blocked by GitHub (private repos on the free plan have no branch
+protection), so "everything goes through a PR" is a **team process rule**, enforced by review habits,
+not by the platform.
 
-## The gates before any agent change ships
+Same principle as CI: the agent influences the cluster **only** through Git: it can never touch the
+cluster or the registry directly. Argo CD reconciles what lands on `main`.
 
-1. **Human review** — branch protection on `main` in both repos; no PR merges without it.
-2. **Policy-as-code in CI** (config repo) — `helm lint` + `kubeconform`/OPA reject privileged pods, `:latest` on
-   the critical path, missing probes/PDBs, or plaintext Secrets (only SealedSecrets allowed). These run on the
-   PR, before merge.
+## The gates before an agent change reaches the cluster
 
-## Worst case, and why it's contained
-
-**Worst case:** a subtly wrong change slips through — e.g. a liveness probe that checks a downstream, an
-over-permissive ServiceAccount, a non-idempotent handler, or dropping `min.insync.replicas` — and degrades the
-critical path after merge.
-
-**Why it's contained:**
-- review + policy checks catch the common classes *before* merge;
-- Argo CD history + `git revert` give a fast rollback;
-- PDBs, topology spread, and HPA limit the blast radius;
-- SLO burn-rate alerts surface user-visible impact quickly.
-
-The agent never has a direct write path to the cluster, so the *only* way its change ships is through a gate we
-control.
-
-See `agent-log.md` for concrete mistakes we actually caught.
+1. **Human review** on the PR: the primary gate
+2. **Application repo, on the PR** (`pr-check.yml`): the test suites of every changed service and
+   the frontend type-check/build must pass before merge. No credentials, no image push.
+3. **Application repo, after merge** (`ci.yml`): tests run again, the image is built and pushed,
+   and the tag is bumped in the config repo; only then does Argo CD roll it out.
+4. **Config repo**: no CI runs on PRs today; a broken chart is caught by human review and, at worst,
+   by Argo CD failing to render/sync (it keeps the last healthy state). Adding `helm lint` +
+   `kubeconform` on config-repo PRs is a known gap / future improvement, not an active gate.

@@ -29,7 +29,10 @@ KC=https://auth.g03.cpo2026.it           # Keycloak (login/token)
 # `eurotransit-frontend` (§3) per il password-grant; RISPEGNILO a fine sessione (§9).
 DEMO_USER=admin
 DEMO_PW=admin
-TRIP=FR9592-20260629                     # tripCode di esempio (se SOLD_OUT va bene lo stesso: è un esito corretto)
+TRIP=FR9592-20260629                     # tripCode per il traffico di fondo: scegline uno con MOLTI posti
+                                         # (il loop del §4 consuma 1 posto a booking!). Per trovarne uno:
+                                         #   curl -sk "$APP/api/catalog/trips?size=5" | grep -oE '"code":"[^"]*"|"availableSeats":[0-9]*'
+                                         # (GET pubblico, niente token; availableSeats alto = trip buono)
 ```
 
 ## 2. Accensione
@@ -104,21 +107,59 @@ mktoken
 
 ## 4. Traffico di fondo (TERMINALE DEDICATO — incolla prima il §1)
 
-Le dashboard/SLO/tracce hanno senso solo sotto traffico. Lascia girare questo per tutta la demo:
+Le dashboard/SLO/tracce hanno senso solo sotto traffico. Questo loop fa **booking COMPLETI** che seguono
+la logica vera dell'app (non solo DRAFT!): `POST /api/orders` (DRAFT) → `POST /legs` con il priceToken
+firmato del Catalog (reserve-on-add, async via Kafka → **HELD**) → `POST /pay` a finestra attiva (202 →
+saga authorize/confirm/capture → **CONFIRMED**). Così Tempo mostra la traccia intera (orders + inventory
++ payments + notifications) e le righe saga della dashboard RED si muovono. Scrive nei DB: va bene, è il punto.
+
+> Il pay senza body usa la carta di test server-side sul **sandbox PayPal** (`payments.provider=paypal`
+> in cluster): ~1 booking ogni 8s è un ritmo che il sandbox regge senza problemi.
+
+Incolla TUTTO il blocco e lascialo girare per tutta la demo:
 ```bash
-# un ordine ogni 5s, token rinnovato ogni giro di 30 (non scade mai a metà)
+# un booking completo: DRAFT -> leg (reserve) -> attesa HELD -> pay. Stampa l'esito di ogni giro.
+book() {
+  # 1) DRAFT (201). L'orderId è il primo campo della risposta.
+  OID=$(curl -sk -X POST "$APP/api/orders" -H "Authorization: Bearer $TOK" \
+    | grep -o '"orderId":"[^"]*' | cut -d'"' -f4)
+  [ -z "$OID" ] && { echo -n "draft-KO "; return; }
+  # 2) priceToken FRESCO dal Catalog (GET pubblico, niente token; il quote firmato SCADE -> mai riusarlo)
+  PT=$(curl -sk "$APP/api/catalog/trips/$TRIP" | grep -o '"priceToken":"[^"]*' | cut -d'"' -f4)
+  [ -z "$PT" ] && { echo -n "quote-KO "; return; }
+  # 3) leg OUTBOUND -> reserve-on-add (parte il comando Kafka reserve-seats; la leg nasce PENDING)
+  curl -sk -o /dev/null -X POST "$APP/api/orders/$OID/legs" \
+    -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
+    -d "{\"direction\":\"OUTBOUND\",\"tripCode\":\"$TRIP\",\"qty\":1,\"priceToken\":\"$PT\"}"
+  # 4) aspetta la LEG "RESERVED" (la reply reservation-result, ~2s). ATTENZIONE: l'ordine è HELD
+  #    SUBITO (sincrono), ma pagare con la leg ancora PENDING dà 409 "not payable" — si aspetta la LEG.
+  #    Nel JSON il 1° "status" è dell'ordine, il 2° è della leg.
+  LST=""
+  for i in 1 2 3 4 5 6 7 8; do
+    R=$(curl -sk "$APP/api/orders/$OID" -H "Authorization: Bearer $TOK")
+    OST=$(echo "$R" | grep -o '"status":"[^"]*' | head -1 | cut -d'"' -f4)
+    LST=$(echo "$R" | grep -o '"status":"[^"]*' | sed -n 2p | cut -d'"' -f4)
+    [ "$LST" = "RESERVED" ] && break
+    [ "$OST" = "REJECTED" ] && { echo -n "SOLD_OUT "; return; }   # esito corretto, non un errore
+    sleep 1
+  done
+  [ "$LST" != "RESERVED" ] && { echo -n "stuck:$LST "; return; }
+  # 5) pay senza body (carta di test server-side) -> atteso 202; confirm+capture proseguono async
+  curl -sk -o /dev/null -w "%{http_code} " -X POST "$APP/api/orders/$OID/pay" \
+    -H "Authorization: Bearer $TOK"
+}
+
+# loop infinito: token rinnovato ogni 12 booking (~2 min, il token dura 5 -> mai a metà giro)
 while true; do
   TOK=$(curl -sk "$KC/realms/eurotransit/protocol/openid-connect/token" \
     -d "grant_type=password&client_id=eurotransit-frontend&username=$DEMO_USER&password=$DEMO_PW" \
     | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
-  for i in $(seq 1 30); do
-    curl -sk -o /dev/null -w "%{http_code} " -X POST "$APP/api/orders" \
-      -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
-      -d "{\"tripCode\":\"$TRIP\",\"qty\":1}"
-    sleep 5
-  done; echo " [token rinnovato]"
+  [ -z "$TOK" ] && { echo "token-KO (Direct Access Grants ON? §3)"; sleep 5; continue; }
+  for i in $(seq 1 12); do book; sleep 5; done
+  echo " [token rinnovato]"
 done
-# atteso a video: una fila di "202 202 202..." (l'ack durevole dell'intake async)
+# atteso a video: una fila di "202 202 202..." = booking pagati, saga in volo verso CONFIRMED.
+# "SOLD_OUT" sporadici = trip esaurito (never-oversell che rifiuta pulito): cambia $TRIP (vedi tabella in fondo).
 ```
 
 ## 5. Aprire i tool (OGNI riga in un SUO terminale, lasciali aperti)
@@ -172,16 +213,36 @@ kubectl -n argocd port-forward svc/argocd-server 8081:80
   **due hop Kafka via Debezium** (colonna `traceparent` nell'outbox → header Kafka).
   *(Teniamo il 10% delle tracce sane: se una manca è il tail-sampling che lavora, non un bug.)*
 
-### 6c. Money path a mano (la prova regina, 30 secondi)
+### 6c. Money path a mano (la prova regina, ~1 minuto — mostra OGNI stato)
 ```bash
 mktoken   # (se è passato tempo)
-# piazza un ordine e cattura l'orderId
-curl -sk -X POST "$APP/api/orders" -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
-  -d "{\"tripCode\":\"$TRIP\",\"qty\":1}"
-# -> copia "orderId" dalla risposta (status PENDING), poi interroga finché è terminale:
-curl -sk "$APP/api/orders/<ORDER_ID>" -H "Authorization: Bearer $TOK"
-# atteso in pochi secondi: "status":"CONFIRMED"  (oppure REJECTED/SOLD_OUT se il trip è esaurito
-# — fallo notare: è il never-oversell che rifiuta pulito, NON un errore)
+
+# 1) DRAFT: booking vuoto
+curl -sk -X POST "$APP/api/orders" -H "Authorization: Bearer $TOK"
+# -> copia "orderId" dalla risposta ("status":"DRAFT") in OID:
+OID=<ORDER_ID>
+
+# 2) quote firmato dal Catalog (il prezzo lo firma Catalog, Orders lo verifica offline: Catalog resta
+#    FUORI dal money path) e leg di andata -> reserve-on-add:
+PT=$(curl -sk "$APP/api/catalog/trips/$TRIP" | grep -o '"priceToken":"[^"]*' | cut -d'"' -f4)
+curl -sk -X POST "$APP/api/orders/$OID/legs" \
+  -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
+  -d "{\"direction\":\"OUTBOUND\",\"tripCode\":\"$TRIP\",\"qty\":1,\"priceToken\":\"$PT\"}"
+
+# 3) rileggi: in 1-2s "status":"HELD" + la finestra di checkout ("expiresAt"/"remainingSeconds",
+#    autorità del BACKEND, il countdown del frontend è solo display):
+curl -sk "$APP/api/orders/$OID" -H "Authorization: Bearer $TOK"
+
+# 4) paga dentro la finestra (senza body = carta di test server-side sul sandbox PayPal) -> 202:
+curl -sk -X POST "$APP/api/orders/$OID/pay" -H "Authorization: Bearer $TOK"
+
+# 5) interroga finché è terminale — si vede la saga avanzare PAYING -> AUTHORIZED -> CONFIRMED:
+curl -sk "$APP/api/orders/$OID" -H "Authorization: Bearer $TOK"
+# atteso in pochi secondi: "status":"CONFIRMED" e la leg "CONFIRMED"
+# (REJECTED + "rejectionReason":"SOLD_OUT" se il trip è esaurito — fallo notare: è il never-oversell
+#  che rifiuta pulito, NON un errore)
+# CHIUDI IL CERCHIO SU TEMPO: cerca l'orderId nelle tracce -> si vede l'intero viaggio attraverso
+# orders -> (Kafka/Debezium) -> inventory/payments -> notifications.
 ```
 
 ## 7. DEMO CANARY (Fase 5) — release SLO-gated davanti ai loro occhi
@@ -313,5 +374,7 @@ az aks show -g $RG -n $CLUSTER --query powerState.code -o tsv     # deve stampar
 | `eurotransit` **OutOfSync** in Argo | campi runtime di Rollouts (pesi/selector) | è cosmetico: Health=Healthy basta |
 | rollout fermo su "Progressing" | è in PAUSA tra gli step del canary | è il design: guarda step/pesi su :3100 |
 | niente pallini exemplar | servono scrape freschi + traffico | lascia girare il loop 2-3 min e ricarica |
-| ordini tutti REJECTED (SOLD_OUT) | trip esaurito | scegli un altro trip: `curl -sk "$APP/api/catalog/trips" -H "Authorization: Bearer $TOK"` |
+| booking tutti `SOLD_OUT` | trip esaurito (il loop consuma 1 posto a giro) | trova un trip con posti: `curl -sk "$APP/api/catalog/trips?size=5" \| grep -oE '"code":"[^"]*"\|"availableSeats":[0-9]*'` → cambia `TRIP=` e rilancia il loop |
+| il loop stampa `stuck:DRAFT` | la reply Kafka non torna (reserve mai confermata) | guarda `kubectl -n kafka get kafkaconnector` (CDC vivo?) e su Prometheus `sum by (topic)(kafka_consumergroup_lag)` — è la demo del §6a che diventa reale |
+| il pay torna `400/409` invece di 202 | la finestra di 15 min è scaduta (o l'ordine non è HELD) | rifai un booking da zero: la finestra è autorità del backend, è il design |
 | pod `Pending: Insufficient cpu/memory` | i 6 vCPU sono al limite (finding noto) | di solito rientra da solo (HPA scala giù); altrimenti guarda `kubectl describe pod <nome>` |
