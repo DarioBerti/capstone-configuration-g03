@@ -18,9 +18,15 @@ in silent-check-sso.html and the Vite/Tailwind inline styles. To switch to enfor
 Content-Security-Policy AND allow the silent-sso inline script (add its sha256 hash to script-src, or serve it
 with a per-request nonce). connect-src / frame-src include the browser-facing Keycloak origin for the OAuth2/PKCE
 token exchange + JWKS.
+
+PayPal Card Fields (Advanced Card Payments): the card inputs are PayPal-hosted iframes + a client-side SDK, so
+PayPal's origins must be allowed in script-src (the sdk/js loader), frame-src (the hosted card + 3DS iframes),
+connect-src (SDK XHR) and img-src (paypalobjects assets); Permissions-Policy `payment` is delegated to PayPal so
+the SDK may use the Payment Request API. Report-only today, but these must be correct for the switch to enforcing.
 */ -}}
 {{- if .Values.global.securityHeaders.enabled }}
 {{- $kc := .Values.global.securityHeaders.keycloakOrigin }}
+{{- $pp := "https://*.paypal.com https://*.paypalobjects.com" }}
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -35,6 +41,6 @@ spec:
     customFrameOptionsValue: SAMEORIGIN
     referrerPolicy: strict-origin-when-cross-origin
     customResponseHeaders:
-      Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=()"
-      Content-Security-Policy-Report-Only: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; frame-src 'self' {{ $kc }}; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' {{ $kc }}"
+      Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=(self \"https://www.paypal.com\")"
+      Content-Security-Policy-Report-Only: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; frame-src 'self' {{ $kc }} {{ $pp }}; script-src 'self' {{ $pp }}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: {{ $pp }}; connect-src 'self' {{ $kc }} {{ $pp }}"
 {{- end }}
