@@ -705,3 +705,25 @@ here so this log is the single comprehensive graded record.
   full suite (`just test-all`, 6/6 green) and with the test asserting the W3C `traceparent` persisted in the outbox row.
 - **Lesson:** "dependency on the classpath + property configured" does NOT imply "feature active": major upgrades move
   auto-configurations. The proof must be **positive** (an injected bean, a visible span), never the absence of errors.
+
+## 34. PayPal card→button swap left the server order with no return_url → buyer stranded after paying 🟧
+
+- **Produced:** the checkout was switched from PayPal **Card Fields** (in-page iframes, no redirect) to the **PayPal
+  button** (approve-on-PayPal), but the server-created order (`PayPalSessionProvider.createOrder`) was left unchanged —
+  `intent=AUTHORIZE` with **no `experience_context`**, so no `return_url`/`cancel_url`. A first correction then pointed
+  the return URL at `/checkout/{orderId}`.
+- **Why wrong:** Card Fields never redirects, so the missing return URL was harmless — the swap silently made it
+  load-bearing. The button's redirect fallback (mobile / blocked popup) completes the payment on paypal.com and then
+  has **nowhere to send the browser back** → the buyer is stranded and never returns to the booking. And
+  `/checkout/{orderId}` isn't a real SPA route (`routes/router.tsx` only defines `/orders/:orderId`), so even *with* a
+  return URL that first fix would have landed on the NotFound page.
+- **How caught:** manual end-to-end testing on the cluster — "when I complete the payment on the PayPal page I don't come
+  back" — then the exact return path was confirmed against `router.tsx` (checkout is `/orders/:orderId`, not `/checkout/…`).
+- **Fix:** create the session order with a wallet `payment_source.paypal.experience_context` whose
+  `return_url = cancel_url = {FRONTEND_BASE_URL}/orders/{orderId}` (+ `user_action=PAY_NOW`, `shipping_preference=NO_SHIPPING`);
+  inject `FRONTEND_BASE_URL` in `_workload.tpl`, derived from `global.domain` so kind (`app.localhost`) and prod
+  (`app.g03.cpo2026.it`) each get their own host. A unit test asserts both URLs; create-order idempotency
+  (`PayPal-Request-Id=session-{orderId}`) means the redirect-resume re-render reuses the same PayPal order.
+- **Lesson:** swapping a payment UI component silently changes the integration contract — Card Fields and the button
+  share one create-order call but only one of them redirects. When a frontend change repurposes a backend call,
+  re-verify the backend's old assumptions ("no redirect, so no return URL needed") against the new flow.

@@ -213,6 +213,10 @@ spec:
               value: "paypal"
             - name: PAYPAL_BASE_URL
               value: {{ .svc.paypal.baseUrl | quote }}
+            {{- /* Where PayPal redirects the buyer back after button approval — the same public host the Ingress
+                   serves the SPA on, so kind (app.localhost) and prod (app.g03…) each get the right return URL. */}}
+            - name: FRONTEND_BASE_URL
+              value: {{ printf "https://%s" .root.Values.global.domain | quote }}
             - name: PAYPAL_CLIENT_ID
               valueFrom:
                 secretKeyRef:

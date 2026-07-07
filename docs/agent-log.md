@@ -8,7 +8,7 @@
 > Each entry: **what the agent produced → why it was wrong → how we caught it → the fix** (+ a lesson where useful).
 >
 > This is the **curated top 10** — the mistakes that mattered most (money-path correctness, deploy blockers,
-> multi-agent contracts, live-cluster findings). The full chronological record (33 entries) is in
+> multi-agent contracts, live-cluster findings). The full chronological record (34 entries) is in
 > [`agent-log-full.md`](agent-log-full.md).
 
 ---
