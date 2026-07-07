@@ -41,10 +41,3 @@ Hypothesis held; nothing changed.
 
 *Prod-grade next step (decided NO for now): PG17 failover slots would raise the CDC bar from "self-heals, only a
 best-effort notification can be lost in the gap" to "zero missed events". Re-run this experiment after that upgrade.*
-
-## For the oral (one breath)
-> "We kill the inventory-db primary. A standby is promoted in ~12 seconds and no committed reservation is lost —
-> RPO=0, because a synchronous commit had already reached the standby. Never-oversell holds. Since we run only 2
-> instances (the disk-constrained Part-2 tradeoff), writes block for ~1 minute until the killed pod rejoins as a
-> standby — that's consistency over availability, on purpose. The Debezium slot is recreated on the new primary
-> and the CDC resumes on its own."

@@ -31,9 +31,3 @@ It killed `debezium-connect-connect-1`; the pod was immediately recreated.
 ## Verdict
 ✅ **PASS.** Task stayed/rebalanced onto the surviving worker with no human action, publication gap of seconds,
 the order confirmed, intake unaffected, zero lost events. Hypothesis held; nothing changed.
-
-## For the oral (one breath)
-> "Debezium is now the only bridge from the outbox to Kafka, so we kill a Connect worker. The other worker keeps
-> the connectors running, the CDC pauses for a few seconds at most, and the order confirms. Nothing is lost —
-> the slot's confirmed position lives in Postgres and the offsets live in Kafka, so a dead worker just re-reads
-> a little unconfirmed WAL, which idempotent consumers dedup."

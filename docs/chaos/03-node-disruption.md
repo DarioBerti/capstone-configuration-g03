@@ -39,10 +39,3 @@ kubectl drain aks-…-l --ignore-daemonsets --delete-emptydir-data --timeout=100
 stayed available with the right (non-fundamental) pods yielding. ⚠️ **With a documented caveat**: on only 3 nodes
 the cluster can't host everything on 2 during the drain, so non-critical pods go Pending and a booking placed
 *exactly* during the drain may not complete until recovery. Everything self-recovered on uncordon.
-
-## For the oral (one breath)
-> "We drain a node — the one *without* the Kafka broker majority, so the quorum survives. PodDisruptionBudgets stop
-> the drain from evicting the last DB replica, and topology spread + our PriorityClasses keep every money-path
-> service Ready while observability and the chaos tooling yield. The honest caveat is capacity: three B2s_v2 nodes
-> can't run everything on two, so some non-critical pods wait as Pending until the node returns — then it all
-> recovers. On a Pay-As-You-Go pool a 4th node removes even that."

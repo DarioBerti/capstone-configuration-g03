@@ -34,9 +34,3 @@ echo 'this-is-not-json' | kubectl -n kafka exec -i eurotransit-dual-role-0 -- \
 ✅ **PASS.** The poison was isolated in the per-service DLT after exactly the bounded retries, the offset was
 committed, the consumer stayed healthy, and the very next order confirmed. Hypothesis held; nothing changed.
 
-## For the oral (one breath)
-> "A bad message can't take us down. We retry it a bounded number of times, then park it in a per-service
-> dead-letter topic and commit the offset, so the partition isn't blocked — the next order confirms normally.
-> That's our async replacement for the circuit breaker."
-
-*Upgrade path (Phase-2 open decision) if head-of-line blocking ever matters at scale: non-blocking `@RetryableTopic`.*

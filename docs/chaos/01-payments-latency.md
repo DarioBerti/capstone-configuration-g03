@@ -35,8 +35,4 @@ did cross PT2M would be re-driven by `OrderTimeoutSweeper` (idempotent — `UNIQ
 (slower but correct); no lost order, no double-charge, no DLT (latency is not an error → nothing poisoned).
 Hypothesis held; nothing changed.
 
-## For the oral (one breath)
-> "We add 3 seconds of latency to Payments. The customer's request still returns in milliseconds and browsing is
-> untouched — the slow step is behind Kafka, not on the request thread. The order just confirms a bit later, and
-> if it ever crossed our 2-minute deadline the sweeper would re-drive it idempotently. Temporal decoupling
-> contains the failure instead of propagating it — the async replacement for the circuit breaker."
+

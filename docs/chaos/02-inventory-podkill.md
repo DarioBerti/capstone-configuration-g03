@@ -34,8 +34,3 @@ It killed replica `inventory-…-gnkgd` (confirmed in the PodChaos record) while
 ✅ **PASS.** Never-oversell held with exact seat arithmetic, the order confirmed straight through the kill, no
 double-charge, and Inventory self-recovered. Hypothesis held; nothing changed.
 
-## For the oral (one breath)
-> "We kill an Inventory pod mid-reservation. The order still confirms and the seat count is exact — because
-> offsets commit only on a clean handler return (a half-done command is redelivered to the surviving replica),
-> and the atomic conditional decrement + `UNIQUE(order_id, trip_code)` make the redelivery a no-op replay.
-> At-least-once + idempotency = exactly one reservation per order."

@@ -39,8 +39,3 @@ An order parked past the 2-minute deadline would instead be re-driven by `OrderT
 heal every order converged to exactly one terminal state with nothing lost or double-applied. Hypothesis held;
 nothing changed.
 
-## For the oral (one breath)
-> "This is the central test. We partition Orders from Kafka. The customer still gets a durable 201/202 — the row
-> is on disk in Postgres — but the saga stops advancing because Orders can't read its replies. Nothing is
-> corrupted: when the network heals, Orders drains the backlog and the order confirms in seconds. A Kafka outage
-> is a *delay*, never a loss."
