@@ -29,10 +29,11 @@ KC=https://auth.g03.cpo2026.it           # Keycloak (login/token)
 # `eurotransit-frontend` (§3) per il password-grant; RISPEGNILO a fine sessione (§9).
 DEMO_USER=admin
 DEMO_PW=admin
-TRIP=FR9592-20260629                     # tripCode per il traffico di fondo: scegline uno con MOLTI posti
+TRIP=IT7583-20260707                     # tripCode per il traffico di fondo: scegline uno con MOLTI posti
                                          # (il loop del §4 consuma 1 posto a booking!). Per trovarne uno:
-                                         #   curl -sk "$APP/api/catalog/trips?size=5" | grep -oE '"code":"[^"]*"|"availableSeats":[0-9]*'
-                                         # (GET pubblico, niente token; availableSeats alto = trip buono)
+                                         #   curl -sk "$APP/api/catalog/trips?size=5" | grep -oE '"code":"[A-Z]+[0-9]+-[0-9]{8}"|"availableSeats":[0-9]+'
+                                         # (GET pubblico, niente token; il pattern prende SOLO i tripCode,
+                                         #  non i codici stazione. Verificato 07/07: IT8001-20260706 → 150 posti)
 ```
 
 ## 2. Accensione
@@ -229,8 +230,10 @@ curl -sk -X POST "$APP/api/orders/$OID/legs" \
   -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
   -d "{\"direction\":\"OUTBOUND\",\"tripCode\":\"$TRIP\",\"qty\":1,\"priceToken\":\"$PT\"}"
 
-# 3) rileggi: in 1-2s "status":"HELD" + la finestra di checkout ("expiresAt"/"remainingSeconds",
-#    autorità del BACKEND, il countdown del frontend è solo display):
+# 3) rileggi: l'ordine è "HELD" SUBITO con la finestra di checkout ("expiresAt"/"remainingSeconds",
+#    autorità del BACKEND, il countdown del frontend è solo display); la LEG parte "PENDING" e in
+#    ~2s diventa "RESERVED" quando torna la reply Kafka. ASPETTA la leg RESERVED prima di pagare
+#    (pagare con la leg PENDING dà 409 "not payable" — rileggi e riprova):
 curl -sk "$APP/api/orders/$OID" -H "Authorization: Bearer $TOK"
 
 # 4) paga dentro la finestra (senza body = carta di test server-side sul sandbox PayPal) -> 202:
@@ -374,7 +377,7 @@ az aks show -g $RG -n $CLUSTER --query powerState.code -o tsv     # deve stampar
 | `eurotransit` **OutOfSync** in Argo | campi runtime di Rollouts (pesi/selector) | è cosmetico: Health=Healthy basta |
 | rollout fermo su "Progressing" | è in PAUSA tra gli step del canary | è il design: guarda step/pesi su :3100 |
 | niente pallini exemplar | servono scrape freschi + traffico | lascia girare il loop 2-3 min e ricarica |
-| booking tutti `SOLD_OUT` | trip esaurito (il loop consuma 1 posto a giro) | trova un trip con posti: `curl -sk "$APP/api/catalog/trips?size=5" \| grep -oE '"code":"[^"]*"\|"availableSeats":[0-9]*'` → cambia `TRIP=` e rilancia il loop |
-| il loop stampa `stuck:DRAFT` | la reply Kafka non torna (reserve mai confermata) | guarda `kubectl -n kafka get kafkaconnector` (CDC vivo?) e su Prometheus `sum by (topic)(kafka_consumergroup_lag)` — è la demo del §6a che diventa reale |
-| il pay torna `400/409` invece di 202 | la finestra di 15 min è scaduta (o l'ordine non è HELD) | rifai un booking da zero: la finestra è autorità del backend, è il design |
+| booking tutti `SOLD_OUT` | trip esaurito (il loop consuma 1 posto a giro) | trova un trip con posti: `curl -sk "$APP/api/catalog/trips?size=5" \| grep -oE '"code":"[A-Z]+[0-9]+-[0-9]{8}"\|"availableSeats":[0-9]+'` → cambia `TRIP=` e rilancia il loop |
+| il loop stampa `stuck:PENDING` | la reply Kafka non torna (reserve mai confermata) | guarda `kubectl -n kafka get kafkaconnector` (CDC vivo?) e su Prometheus `sum by (topic)(kafka_consumergroup_lag)` — è la demo del §6a che diventa reale |
+| il pay torna **409** | leg ancora `PENDING` (pagato troppo presto: l'ordine è HELD subito ma paga solo a leg RESERVED) oppure finestra dei 15 min scaduta | il loop nuovo aspetta già la leg RESERVED; a mano rileggi il GET finché la leg è RESERVED e ripaga. Finestra scaduta → booking nuovo |
 | pod `Pending: Insufficient cpu/memory` | i 6 vCPU sono al limite (finding noto) | di solito rientra da solo (HPA scala giù); altrimenti guarda `kubectl describe pod <nome>` |

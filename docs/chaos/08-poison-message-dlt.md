@@ -18,4 +18,7 @@ echo 'this-is-not-json' | kubectl -n kafka exec -i eurotransit-dual-role-0 -- \
 - **No head-of-line blocking:** the very next valid booking reached **CONFIRMED** — the consumer moved
   straight past the poison. No crash-loop (0 restarts).
 
+<<<<<<< HEAD
 **Takeaway:** a bad message is parked, never propagated — the async replacement for the circuit breaker.
+=======
+>>>>>>> 582ea427d88224a1b23c3e8a8d7589c9f775502d

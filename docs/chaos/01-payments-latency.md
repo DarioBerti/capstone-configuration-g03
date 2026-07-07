@@ -17,5 +17,14 @@ kubectl apply -f platform/chaos-mesh/01-payments-latency.yaml
 - No DLT entries (latency is not an error). If an order crossed the 2-minute deadline, the timeout
   sweeper would re-drive it idempotently (no double-charge).
 
+<<<<<<< HEAD
 **Takeaway:** temporal decoupling contains the failure — the async replacement for the circuit breaker,
 and the user sees nothing.
+=======
+## Verdict
+✅ **PASS.** Intake ack + catalog stayed fast (well within the 300 ms SLO) throughout; the order confirmed
+(slower but correct); no lost order, no double-charge, no DLT (latency is not an error → nothing poisoned).
+Hypothesis held; nothing changed.
+
+
+>>>>>>> 582ea427d88224a1b23c3e8a8d7589c9f775502d

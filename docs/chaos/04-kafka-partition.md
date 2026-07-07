@@ -19,4 +19,16 @@ kubectl apply -f platform/chaos-mesh/04-kafka-partition.yaml
   The saga converged.
 - An order stuck past the 2-minute deadline would be re-driven idempotently by the timeout sweeper.
 
+<<<<<<< HEAD
 **Takeaway:** a Kafka outage is a *delay*, never a loss — progress stops, correctness doesn't.
+=======
+An order parked past the 2-minute deadline would instead be re-driven by `OrderTimeoutSweeper` (idempotent —
+`UNIQUE(order_id)`/`UNIQUE(order_id, trip_code)` → no double-charge, no oversell). *Documented warm-up variant
+(not re-run here): `PodChaos` on ONE broker — RF=3 / `min.insync.replicas=2` absorbs it with no visible effect.*
+
+## Verdict
+✅ **PASS.** Intake stayed durable through the partition (no 5xx), the saga froze but never corrupted, and on
+heal every order converged to exactly one terminal state with nothing lost or double-applied. Hypothesis held;
+nothing changed.
+
+>>>>>>> 582ea427d88224a1b23c3e8a8d7589c9f775502d

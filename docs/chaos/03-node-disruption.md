@@ -11,6 +11,7 @@ kubectl drain <node-l> --ignore-daemonsets --delete-emptydir-data --timeout=100s
 
 ## Results — ✅ PASS (with a documented capacity caveat)
 
+<<<<<<< HEAD
 - **PDBs governed the drain**: it refused to evict the last DB replica ("would violate the pod's
   disruption budget") and waited instead of forcing it.
 - **Money-path services never dropped to 0 Ready**; evicted replicas rescheduled on the other nodes,
@@ -23,3 +24,10 @@ kubectl drain <node-l> --ignore-daemonsets --delete-emptydir-data --timeout=100s
 
 **Takeaway:** the invariant held (money path up, quorum safe); the limit is capacity of the student
 pool, not the design — a 4th node would remove the caveat.
+=======
+## Verdict
+✅ **PASS on the invariant** — PDBs governed the drain, the Kafka quorum was preserved, and the money-path services
+stayed available with the right (non-fundamental) pods yielding. ⚠️ **With a documented caveat**: on only 3 nodes
+the cluster can't host everything on 2 during the drain, so non-critical pods go Pending and a booking placed
+*exactly* during the drain may not complete until recovery. Everything self-recovered on uncordon.
+>>>>>>> 582ea427d88224a1b23c3e8a8d7589c9f775502d
